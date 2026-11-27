@@ -5,6 +5,7 @@
 // sceKernelAllocMemBlockForVM), while Play!'s recompiler wants one small
 // allocation per translated block, so translated code is carved from a pool.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -90,8 +91,7 @@ public:
 
 	size_t GetUsedBytes()
 	{
-		std::lock_guard<std::mutex> lock(m_mutex);
-		return m_usedBytes;
+		return m_usedBytes.load(std::memory_order_relaxed);
 	}
 
 	size_t GetFreeRangeCount()
@@ -119,5 +119,5 @@ private:
 	size_t m_size = 0;
 	std::map<uintptr_t, size_t> m_free;
 	std::map<uintptr_t, size_t> m_used;
-	size_t m_usedBytes = 0;
+	std::atomic<size_t> m_usedBytes{0};
 };

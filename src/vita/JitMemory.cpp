@@ -25,6 +25,7 @@ namespace
 	// Free memory kept for what the VU1 thread and the current EE slice compile
 	// before the next safe point; the EE's code is dropped when less is left.
 	constexpr size_t FLUSH_RESERVE = 1536 * 1024;
+	constexpr size_t EMERGENCY_RESERVE = 512 * 1024;
 	constexpr SceUInt64 MIN_FLUSH_INTERVAL_US = 5000000;
 	size_t g_softLimit = 0; //0 = the whole pool
 	SceUInt64 g_lastFlush = 0;
@@ -45,11 +46,15 @@ extern "C" int vitaps2_jit_should_flush()
 {
 	size_t limit = g_pool.GetCapacity();
 	if((g_softLimit != 0) && (g_softLimit < limit)) limit = g_softLimit;
-	if(g_pool.GetUsedBytes() + FLUSH_RESERVE < limit) return 0;
+	const size_t used = g_pool.GetUsedBytes();
+	if(used < limit && limit - used > FLUSH_RESERVE) return 0;
 	// What is left after a flush may be VU and IOP code that cannot be dropped:
 	// never spend all the time flushing.
 	SceUInt64 now = sceKernelGetProcessTimeWide();
-	if((g_flushes != 0) && (now - g_lastFlush < MIN_FLUSH_INTERVAL_US)) return 0;
+	// A nearly full pool must not abort merely because a recent flush
+	// happened. The VM calls this only at its safe EE discard point.
+	const bool emergency = used >= limit || limit - used <= EMERGENCY_RESERVE;
+	if(!emergency && (g_flushes != 0) && (now - g_lastFlush < MIN_FLUSH_INTERVAL_US)) return 0;
 	g_lastFlush = now;
 	g_flushes++;
 	std::printf("JIT memory: %u/%u KB used, dropping EE code (flush %u)\n", static_cast<unsigned int>(g_pool.GetUsedBytes() / 1024),

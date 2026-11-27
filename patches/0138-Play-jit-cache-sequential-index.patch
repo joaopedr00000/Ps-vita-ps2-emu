@@ -1,7 +1,7 @@
 diff --git a/Source/JitCache.cpp b/Source/JitCache.cpp
 --- a/Source/JitCache.cpp
 +++ b/Source/JitCache.cpp
-@@ -170,18 +170,31 @@
+@@ -170,18 +170,33 @@
  	size_t position = 8 + 8 + 4 + (m_ranges.size() * 4);
  	m_fileSize = position;
 +	// Read sequentially through the existing 64 KiB stdio buffer.
@@ -9,6 +9,8 @@ diff --git a/Source/JitCache.cpp b/Source/JitCache.cpp
 +	uint8 skip[4096];
 +	if(length < 0 || static_cast<size_t>(length) < position) { std::fclose(file); m_fileSize = 0; return; }
 +	const size_t fileLength = static_cast<size_t>(length);
++	// Avoid repeated hash-table rehashes when reopening a large cache.
++	m_index.reserve((fileLength / 640 < 100000) ? fileLength / 640 : 100000);
  	while(true)
  	{
  		uint32 recordSize = 0;

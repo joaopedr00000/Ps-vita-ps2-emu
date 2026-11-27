@@ -1,0 +1,49 @@
+diff --git a/Source/JitCache.cpp b/Source/JitCache.cpp
+--- a/Source/JitCache.cpp
++++ b/Source/JitCache.cpp
+@@ -133,3 +133,6 @@
+ 	m_readBuffer = std::vector<char>();
+ 	m_writeBuffer = std::vector<char>();
++	m_window = std::vector<uint8>();
++	m_windowStart = 0;
++	m_windowValid = 0;
+ 	m_unflushed = 0;
+@@ -260,5 +263,27 @@
+ 	m_record.resize(iterator->second.size);
+ 	KEY storedKey;
+-	bool ok = (std::fseek(m_readFile, static_cast<long>(iterator->second.offset), SEEK_SET) == 0) &&
+-	          (std::fread(m_record.data(), 1, m_record.size(), m_readFile) == m_record.size()) &&
++	const size_t offset = iterator->second.offset, bytes = iterator->second.size;
++	bool copied = false;
++	constexpr size_t WINDOW_SIZE = 128 * 1024;
++	if(bytes <= WINDOW_SIZE && offset <= m_committedSize && bytes <= m_committedSize - offset)
++	{
++		if(offset < m_windowStart || offset - m_windowStart > m_windowValid || bytes > m_windowValid - (offset - m_windowStart))
++		{
++			m_window.resize(WINDOW_SIZE);
++			m_windowStart = offset;
++			m_windowValid = 0;
++			const size_t available = m_committedSize - offset;
++			const size_t want = available < WINDOW_SIZE ? available : WINDOW_SIZE;
++			if(std::fseek(m_readFile, static_cast<long>(offset), SEEK_SET) == 0)
++				m_windowValid = std::fread(m_window.data(), 1, want, m_readFile);
++		}
++		if(offset >= m_windowStart && offset - m_windowStart <= m_windowValid && bytes <= m_windowValid - (offset - m_windowStart))
++		{
++			std::memcpy(m_record.data(), m_window.data() + (offset - m_windowStart), bytes);
++			copied = true;
++		}
++	}
++	if(!copied) copied = (std::fseek(m_readFile, static_cast<long>(offset), SEEK_SET) == 0) &&
++	                      (std::fread(m_record.data(), 1, bytes, m_readFile) == bytes);
++	bool ok = copied &&
+ 	          ParseRecord(m_record.data(), m_record.size(), storedKey, entry) && (storedKey == key);
+diff --git a/Source/JitCache.h b/Source/JitCache.h
+--- a/Source/JitCache.h
++++ b/Source/JitCache.h
+@@ -140,3 +140,5 @@
+ 	std::vector<char> m_readBuffer;
+ 	std::vector<char> m_writeBuffer; //owned for the lifetime of the stdio stream
++	std::vector<uint8> m_window;
++	size_t m_windowStart = 0, m_windowValid = 0;
+ 	std::vector<uint8> m_record;

@@ -1,0 +1,98 @@
+diff --git a/Source/ee/PS2OS.cpp b/Source/ee/PS2OS.cpp
+--- a/Source/ee/PS2OS.cpp
++++ b/Source/ee/PS2OS.cpp
+@@ -252,3 +252,5 @@
+ 	m_ramSize = ramSize;
++	m_state->osdConfigMagic = 0;
++	m_state->osdConfig2Magic = 0;
+ 
+ 	//Specially selected next thread id to make sure main thread id is 1.
+@@ -2856,15 +2858,50 @@
+-//4B
+-void CPS2OS::sc_GetOsdConfigParam()
+-{
+-	auto language = static_cast<OSD_LANGUAGE>(CAppConfig::GetInstance().GetPreferenceInteger(PREF_SYSTEM_LANGUAGE));
+-	auto widescreenOutput = CAppConfig::GetInstance().GetPreferenceBoolean(PREF_CGSHANDLER_WIDESCREEN);
+-
+-	auto configParam = make_convertible<OSDCONFIGPARAM>(0);
+-	configParam.version = static_cast<uint32>(OSD_VERSION::V2_EXT);
+-	configParam.jpLanguage = (language == OSD_LANGUAGE::JAPANESE) ? 0 : 1;
+-	configParam.language = static_cast<uint32>(language);
+-	configParam.screenType = static_cast<uint32>(widescreenOutput ? OSD_SCREENTYPE::RATIO_16_9 : OSD_SCREENTYPE::RATIO_4_3);
+-
+-	auto configParamPtr = reinterpret_cast<uint32*>(GetStructPtr(m_ee.m_State.nGPR[SC_PARAM0].nV0));
+-	(*configParamPtr) = configParam;
+-}
++//0x4A
++void CPS2OS::sc_SetOsdConfigParam()
++{
++	const uint32 addr = m_ee.m_State.nGPR[SC_PARAM0].nV0;
++	uint32 value = 0;
++	for(uint32 i = 0; i < 4; ++i) value |= uint32(*GetStructPtr(addr + i)) << (8 * i);
++	m_state->osdConfig = value;
++	m_state->osdConfigMagic = 0x4F534436;
++}
++
++//4B
++void CPS2OS::sc_GetOsdConfigParam()
++{
++	auto language = static_cast<OSD_LANGUAGE>(CAppConfig::GetInstance().GetPreferenceInteger(PREF_SYSTEM_LANGUAGE));
++	auto widescreenOutput = CAppConfig::GetInstance().GetPreferenceBoolean(PREF_CGSHANDLER_WIDESCREEN);
++
++	auto configParam = make_convertible<OSDCONFIGPARAM>(0);
++	configParam.version = static_cast<uint32>(OSD_VERSION::V2_EXT);
++	configParam.jpLanguage = (language == OSD_LANGUAGE::JAPANESE) ? 0 : 1;
++	configParam.language = static_cast<uint32>(language);
++	configParam.screenType = static_cast<uint32>(widescreenOutput ? OSD_SCREENTYPE::RATIO_16_9 : OSD_SCREENTYPE::RATIO_4_3);
++
++	const uint32 addr = m_ee.m_State.nGPR[SC_PARAM0].nV0;
++	const uint32 value = (m_state->osdConfigMagic == 0x4F534436) ? m_state->osdConfig : static_cast<uint32>(configParam);
++	for(uint32 i = 0; i < 4; ++i) *GetStructPtr(addr + i) = static_cast<uint8>(value >> (8 * i));
++}
++//0x6E/0x6F: the extended OSD record has four bytes (PS2SDK Config2Param).
++// Byte-wise guest memory accesses avoid crossing the end of host RAM.
++void CPS2OS::sc_TransferOsdConfig2(bool write)
++{
++	const uint32 addr = m_ee.m_State.nGPR[SC_PARAM0].nV0;
++	const uint32 size = m_ee.m_State.nGPR[SC_PARAM1].nV0;
++	const uint32 offset = m_ee.m_State.nGPR[SC_PARAM2].nV0;
++	if(offset >= 4 || size > 4 - offset) return;
++	if(m_state->osdConfig2Magic != 0x4F534432)
++	{
++		const uint32 language = CAppConfig::GetInstance().GetPreferenceInteger(PREF_SYSTEM_LANGUAGE);
++		m_state->osdConfig2 = ((language & 0xFF) << 24) | (2U << 16);
++		m_state->osdConfig2Magic = 0x4F534432;
++	}
++	for(uint32 i = 0; i < size; ++i)
++	{
++		const uint32 shift = (offset + i) * 8;
++		if(write) m_state->osdConfig2 = (m_state->osdConfig2 & ~(0xFFU << shift)) | (uint32(*GetStructPtr(addr + i)) << shift);
++		else *GetStructPtr(addr + i) = static_cast<uint8>(m_state->osdConfig2 >> shift);
++	}
++}
++
++void CPS2OS::sc_SetOsdConfigParam2() { sc_TransferOsdConfig2(true); }
++void CPS2OS::sc_GetOsdConfigParam2() { sc_TransferOsdConfig2(false); }
+@@ -3617,1 +3654,1 @@
+-	&CPS2OS::sc_ReferSemaStatus,	&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,				&CPS2OS::sc_GetOsdConfigParam,		&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,
++	&CPS2OS::sc_ReferSemaStatus,	&CPS2OS::sc_Unhandled,				&CPS2OS::sc_SetOsdConfigParam,				&CPS2OS::sc_GetOsdConfigParam,		&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,
+@@ -3625,1 +3662,1 @@
+-	&CPS2OS::sc_FlushCache,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,
++	&CPS2OS::sc_FlushCache,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_SetOsdConfigParam2,			&CPS2OS::sc_GetOsdConfigParam2,
+diff --git a/Source/ee/PS2OS.h b/Source/ee/PS2OS.h
+--- a/Source/ee/PS2OS.h
++++ b/Source/ee/PS2OS.h
+@@ -85,4 +85,4 @@
+ 	struct BIOS_STATE
+ 	{
+-		uint32 padding[4];
++		uint32 osdConfigMagic, osdConfig, osdConfig2Magic, osdConfig2;
+ 		uint32 idleThreadId;
+@@ -423,3 +423,7 @@
+ 	void sc_ReferSemaStatus();
++	void sc_SetOsdConfigParam();
+ 	void sc_GetOsdConfigParam();
++	void sc_SetOsdConfigParam2();
++	void sc_GetOsdConfigParam2();
++	void sc_TransferOsdConfig2(bool write);
+ 	void sc_GetCop0();
