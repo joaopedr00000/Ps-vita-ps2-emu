@@ -864,18 +864,46 @@ namespace
 		            profile ? (gameName.empty() ? "yes" : gameName.c_str()) : "none");
 		bool tuned = false, playerFile = false;
 		GAME_SETTINGS settings = LoadSettings(path, profile, tuned, playerFile);
+		// Experimental controls applied on every boot (not saved over game settings).
+		// Only allow known A/B settings; globals get reset between games.
+		bool diagnosticLogs = true;
+		bool experimentAutoTune = false;
+		int experimentGsFlips = 120;
+		uint32_t experimentGsAfter = 30;
+		{
+			std::ifstream options(VITAPS2_DATA_DIR "/experiment.ini");
+			std::string line;
+			while(std::getline(options, line))
+			{
+				auto eq = line.find('=');
+				if(eq == std::string::npos) continue;
+				auto key = line.substr(0, eq), value = line.substr(eq + 1);
+				if(key == "diagnostic_logs") diagnosticLogs = value != "0";
+				else if(key == "auto_tune") experimentAutoTune = value == "1";
+				else if(key == "gs_diag") experimentGsFlips = std::clamp(std::atoi(value.c_str()), 0, 300);
+				else if(key == "gs_diag_after") experimentGsAfter = static_cast<uint32_t>(std::clamp(std::atoi(value.c_str()), 0, 3600));
+				else if(key == "iop_thread" || key == "iop_core" || key == "iop_priority" ||
+				        key == "threaded_vu1" || key == "threaded_spu" || key == "spu_core" ||
+				        key == "ee_cycle_rate" || key == "frame_skip" || key == "software_renderer" ||
+				        key == "readback_finish" || key == "target_pixels_neon16" || key == "vu1_async" ||
+				        key == "pump_keep_batch" || key == "texture_lazy_texels")
+				{
+					ApplySetting(settings, key, value);
+					std::printf("experiment %s=%s\n", key.c_str(), value.c_str());
+				}
+			}
+		}
 		// First boot of a game the player has not configured: try the speed
 		// settings that help some games and hurt others (scripted runs only with
 		// auto_tune=1, so experiments keep their settings).
-		bool autoTune = !tuned && !playerFile;
+		bool autoTune = experimentAutoTune && !tuned && !playerFile;
 		std::FILE* perfFile = nullptr;
 		if(autostart)
 		{
 			for(const auto& [key, value] : autostart->settings) ApplySetting(settings, key, value);
 			bool tuneRequested = std::any_of(autostart->settings.begin(), autostart->settings.end(),
 			                                 [](const auto& setting) { return (setting.first == "auto_tune") && (setting.second == "1"); });
-			autoTune = autoTune && tuneRequested;
-			perfFile = std::fopen(PERF_PATH, "w");
+			autoTune = !tuned && !playerFile && tuneRequested;
 			if(FILE* selfTest = std::fopen(VITAPS2_DATA_DIR "/selftest.txt", "w"))
 			{
 				//Code paths only this build runs (NEON): checked here against the plain ones
@@ -990,6 +1018,12 @@ namespace
 				}
 				std::fclose(selfTest);
 			}
+		}
+		if(diagnosticLogs || autostart)
+		{
+			sceIoRemove(VITAPS2_DATA_DIR "/perf-prev.csv");
+			sceIoRename(PERF_PATH, VITAPS2_DATA_DIR "/perf-prev.csv");
+			perfFile = std::fopen(PERF_PATH, "w");
 			if(perfFile)
 			{
 				std::fprintf(perfFile, "t,vm_fps,out_fps,ee_idle,ee_rate");
@@ -1005,8 +1039,12 @@ namespace
 		}
 		const uint64_t runStart = sceKernelGetProcessTimeWide();
 		constexpr const char* GS_DIAG_PATH = VITAPS2_DATA_DIR "/gsdiag.txt";
-		int gsDiagFlips = 0;
-		uint32_t gsDiagAfterSeconds = 0;
+		int gsDiagFlips = (!autostart && diagnosticLogs && !settings.softwareRenderer) ? experimentGsFlips : 0;
+		uint32_t gsDiagAfterSeconds = experimentGsAfter;
+		if(autostart) gsDiagAfterSeconds = 0;
+		std::printf("session settings: EE=%u IOP_thread=%d IOP_core=%u VU1_thread=%d SPU_thread=%d SPU_core=%u GPU=%d frameskip=%u core3=%d\n",
+		            settings.eeCycleRate, settings.iopThread, settings.iopCore, settings.threadedVu1,
+		            settings.threadedSpu, settings.spuCore, !settings.softwareRenderer, settings.frameSkip, VitaCores::g_core3);
 		struct PadScriptEntry { uint64_t start, end; uint32_t buttons; };
 		std::vector<PadScriptEntry> padScript; //autostart: times (us), buttons held for the game
 		uint32_t dumpTargetsAtSeconds = 0; //autostart: every render target to ux0:data/VitaPS2/frames/ at this second
@@ -1047,7 +1085,7 @@ namespace
 			uint32_t iopCoreMask = VitaCores::Mask(settings.iopCore);
 			int iopPriority = static_cast<int>(settings.iopPriority);
 			CPS2VM::g_iopThreadInit = [iopCoreMask, iopPriority]() {
-				sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), iopCoreMask);
+				VitaCores::PinCurrent("IOP", iopCoreMask);
 				sceKernelChangeThreadPriority(sceKernelGetThreadId(), iopPriority);
 				ThreadProfiler::RegisterCurrentThread("PS2 IOP");
 			};
@@ -1078,8 +1116,8 @@ namespace
 		// Third core: VU1 (the audio thread there is light)
 		// Cores: 0 = EE/IOP (the bottleneck, alone), 1 = UI/GPU, 2 = VU1 +
 		// SPU2 audio mixing + audio output.
-		config.emuThreadInit = []() { sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), 0x10000 /* SCE_KERNEL_CPU_MASK_USER_0 */); };
-		config.vu1ThreadInit = []() { sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), 0x40000 /* SCE_KERNEL_CPU_MASK_USER_2 */); };
+		config.emuThreadInit = []() { VitaCores::PinCurrent("EE", 0x10000); };
+		config.vu1ThreadInit = []() { VitaCores::PinCurrent("VU1", 0x40000); };
 		// SPU2 mixing used to share core 1 with the UI/GPU thread: at equal
 		// priority a woken mixer waited until that thread blocked, and the
 		// register reads and audio DMA that wait for the mixer took ~7ms each
@@ -1092,14 +1130,14 @@ namespace
 		uint32_t spuCoreMask = VitaCores::Mask(settings.spuCore);
 		int spuPriority = static_cast<int>(settings.spuPriority);
 		config.spuThreadInit = [spuCoreMask, spuPriority]() {
-			sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), spuCoreMask);
+			VitaCores::PinCurrent("SPU2", spuCoreMask);
 			sceKernelChangeThreadPriority(sceKernelGetThreadId(), spuPriority);
 		};
 		// The profiler samples every 1 ms and does almost nothing: above the decoder
 		// and the mixer, or it only samples while they sleep (a decoder at equal
 		// priority kept it off core 2 for a whole picture).
 		config.profilerThreadInit = []() {
-			sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), VitaCores::Mask(3)); //core 3 when available, else 2
+			VitaCores::PinCurrent("Profiler", VitaCores::Mask(3));
 			sceKernelChangeThreadPriority(sceKernelGetThreadId(), 150);
 		};
 		config.soundFactory = &CSH_Vita::HandlerFactory;
@@ -1289,6 +1327,8 @@ namespace
 		catch(const std::exception& e)
 		{
 			session.reset();
+			if(perfFile) std::fclose(perfFile);
+			std::printf("Boot error: %s\n", e.what());
 			ShowMessage("Failed to boot", e.what());
 			return;
 		}
@@ -1305,6 +1345,15 @@ namespace
 		float vmFps = 0, presentFps = 0;
 		std::vector<ThreadProfiler::SAMPLE> threadUsage;
 		ThreadProfiler::Sample();
+		FILE* hardwareLog = nullptr;
+		FILE* threadsLog = nullptr;
+		if(diagnosticLogs || autostart)
+		{
+			hardwareLog = std::fopen(VITAPS2_DATA_DIR "/hardware.csv", "w");
+			threadsLog = std::fopen(VITAPS2_DATA_DIR "/threads.csv", "w");
+			if(hardwareLog) std::fprintf(hardwareLog, "t,cpu_mhz,bus_mhz,gpu_mhz,xbar_mhz,battery_pct,battery_temp_c,user_free_kb,cdram_free_kb,phycont_free_kb,memory_result,vm_fps,out_fps,ee_idle,core3,vu1_thread,iop_thread,spu_thread\n");
+			if(threadsLog) std::fprintf(threadsLog, "t,thread,tid,affinity_mask,status,cpu_percent_of_one_core\n");
+		}
 
 		// Hang diagnostics: when the game stops presenting, sample where the
 		// EE runs and log the hottest addresses plus IOP/interrupt state.
@@ -1504,6 +1553,29 @@ namespace
 				statsPresented = presented;
 				statsTime = now;
 				threadUsage = ThreadProfiler::Sample();
+				const double diagTime = (now - runStart) / 1000000.0;
+				if(hardwareLog)
+				{
+					SceKernelFreeMemorySizeInfo memory = {};
+					memory.size = sizeof(memory);
+					const int memoryResult = sceKernelGetFreeMemorySize(&memory);
+					std::fprintf(hardwareLog, "%.1f,%d,%d,%d,%d,%d,%.2f,%u,%u,%u,%d,%.2f,%.2f,%.3f,%d,%d,%d,%d\n",
+					             diagTime, scePowerGetArmClockFrequency(), scePowerGetBusClockFrequency(),
+					             scePowerGetGpuClockFrequency(), scePowerGetGpuXbarClockFrequency(),
+					             scePowerGetBatteryLifePercent(), scePowerGetBatteryTemp() / 100.0,
+					             memory.size_user / 1024, memory.size_cdram / 1024, memory.size_phycont / 1024, memoryResult,
+					             vmFps, presentFps, session->GetEeIdleRatio(), VitaCores::g_core3,
+					             settings.threadedVu1, settings.iopThread, settings.threadedSpu);
+					std::fflush(hardwareLog);
+				}
+				if(threadsLog)
+				{
+					for(const auto& usage : threadUsage)
+						std::fprintf(threadsLog, "%.1f,%s,%08X,%08X,%08X,%.2f\n", diagTime, usage.name.c_str(),
+						             static_cast<unsigned>(usage.threadId), static_cast<unsigned>(usage.affinityMask),
+						             static_cast<unsigned>(usage.status), usage.cpuPercent);
+					std::fflush(threadsLog);
+				}
 				// Emulation thread time not spent running the EE: compiling, waiting
 				// for the GS or the SPU thread. A slower EE does not help there.
 				float stallShare = 0.0f;
@@ -1568,7 +1640,7 @@ namespace
 							CIopBios::g_callCounting = true; //IOP HLE calls, in iopcalls.txt
 							Iop::CSpu2::g_countAccesses = true; //SPU2 register accesses, in iopcalls.txt
 						}
-						if(!eeHotMovie && (ipu.commands[2] != perfIpu.commands[2]))
+						if(autostart && !eeHotMovie && (ipu.commands[2] != perfIpu.commands[2]))
 						{
 							eeHotMovie = true;
 							session->ResetEeHotspots();
@@ -1890,7 +1962,7 @@ namespace
 				}
 				for(const auto& usage : threadUsage)
 				{
-					std::printf("cpu %-18s %5.1f%%\n", usage.name.c_str(), usage.cpuPercent);
+					std::printf("cpu %-18s %5.1f%% affinity=%08X status=%08X\n", usage.name.c_str(), usage.cpuPercent, static_cast<unsigned>(usage.affinityMask), static_cast<unsigned>(usage.status));
 				}
 				float eeIdle = session->GetEeIdleRatio();
 				std::printf("fps vm %.1f out %.1f ee-idle %.0f%%\n", vmFps, presentFps, eeIdle * 100.0f);
@@ -2162,6 +2234,8 @@ namespace
 		session.reset();
 		sessionPtr = nullptr;
 		if(perfFile) std::fclose(perfFile);
+		if(hardwareLog) std::fclose(hardwareLog);
+		if(threadsLog) std::fclose(threadsLog);
 	}
 
 	bool ReadAutostart(AUTOSTART& autostart)
@@ -2190,7 +2264,10 @@ int main()
 {
 	sceIoMkdir(DATA_PATH, 0777);
 	// Everything printed (ours and Play!'s) goes to a log file for bug reports.
-	if(std::freopen(LOG_PATH, "w", stdout)) setvbuf(stdout, nullptr, _IOLBF, 0);
+	// Both streams append: independent positions must not overwrite each other.
+	sceIoRemove(VITAPS2_DATA_DIR "/log-prev.txt");
+	sceIoRename(LOG_PATH, VITAPS2_DATA_DIR "/log-prev.txt");
+	if(std::freopen(LOG_PATH, "a", stdout)) setvbuf(stdout, nullptr, _IOLBF, 0);
 	if(std::freopen(LOG_PATH, "a", stderr)) setvbuf(stderr, nullptr, _IONBF, 0);
 	std::printf("VitaPS2 %s starting\n", VITAPS2_BUILD);
 	// Aborts (uncaught exceptions) leave no crash dump: record why.
@@ -2222,7 +2299,7 @@ int main()
 	// Core 3 (with a plugin such as CapUnlocker) for the light threads: audio, profiler, movie copy
 	VitaCores::Detect();
 	// Core 1: keep core 0 free for the EE/IOP thread (the bottleneck).
-	sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), 0x20000 /* SCE_KERNEL_CPU_MASK_USER_1 */);
+	VitaCores::PinCurrent("UI/GPU", 0x20000);
 
 	// Maximum clocks. Only raise them: an overclocking plugin (PSVshell,
 	// LOLIcon) may already run the CPU at 500 MHz, which must be kept.

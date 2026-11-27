@@ -16,6 +16,18 @@ namespace VitaCores
 {
 	inline bool g_core3 = false;
 
+	// Read back the effective affinity. A rejected request must never be
+	// mistaken for successful parallel scheduling in a benchmark.
+	inline void PinCurrent(const char* name, uint32_t mask)
+	{
+		const SceUID id = sceKernelGetThreadId();
+		const int result = sceKernelChangeThreadCpuAffinityMask(id, mask);
+		const int actual = sceKernelGetThreadCpuAffinityMask(id);
+		std::printf("affinity %s tid=%08X requested=%08X result=%08X effective=%08X\n",
+		            name, static_cast<unsigned>(id), static_cast<unsigned>(mask),
+		            static_cast<unsigned>(result), static_cast<unsigned>(actual));
+	}
+
 	inline bool TryCore3(int& result)
 	{
 		SceUID self = sceKernelGetThreadId();
@@ -38,7 +50,7 @@ namespace VitaCores
 		if(!g_core3)
 		{
 			SceIoStat stat;
-			if(sceIoGetstat("ux0:data/VitaPS2/no_core3.txt", &stat) >= 0)
+			if(sceIoGetstat(VITAPS2_DATA_DIR "/no_core3.txt", &stat) >= 0)
 				loaded = -1;
 			else
 			{
@@ -55,7 +67,7 @@ namespace VitaCores
 		std::snprintf(line, sizeof(line), "core 3: %s (affinity change %08X, module %08X)\n", g_core3 ? "available" : "not available, light threads on core 2",
 		              static_cast<unsigned int>(result), static_cast<unsigned int>(loaded));
 		std::fputs(line, stdout);
-		if(std::FILE* file = std::fopen("ux0:data/VitaPS2/core3_app.txt", "w"))
+		if(std::FILE* file = std::fopen(VITAPS2_DATA_DIR "/core3_app.txt", "w"))
 		{
 			std::fputs(line, file);
 			std::fclose(file);

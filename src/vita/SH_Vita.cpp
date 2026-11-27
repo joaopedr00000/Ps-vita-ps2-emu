@@ -64,7 +64,7 @@ void CSH_Vita::ThreadProc()
 {
 	ThreadProfiler::RegisterCurrentThread("Audio");
 	// Core 3 when available (Cores.h), else core 2 with VU1: core 0 is reserved for the EE/IOP thread.
-	sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), VitaCores::Mask(3));
+	VitaCores::PinCurrent("Audio output", VitaCores::Mask(3));
 	std::vector<int16> grain(GRAIN * 2);
 	while(m_running)
 	{

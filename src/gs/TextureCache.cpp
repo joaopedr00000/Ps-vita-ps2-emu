@@ -4,6 +4,7 @@
 #include "GsMemory.h"
 #include "xxhash.h"
 #include "GsProfile.h"
+#include "PageStampScan.h"
 
 void CTextureCache::SetMemory(uint8* ram, const uint16* clut)
 {
@@ -49,11 +50,7 @@ void CTextureCache::MarkAllWritten()
 
 bool CTextureCache::IsValid(const CTexture& texture) const
 {
-	for(uint32 i = 0; i < texture.m_pageCount; i++)
-	{
-		if(m_pageStamps[(texture.m_firstPage + i) & (PAGE_COUNT - 1)] > texture.m_decodeStamp) return false;
-	}
-	return true;
+	return PageStampScan::Valid(m_pageStamps.data(), PAGE_COUNT, texture.m_firstPage, texture.m_pageCount, texture.m_decodeStamp);
 }
 
 bool CTextureCache::IsStale(const CTexture* texture) const
