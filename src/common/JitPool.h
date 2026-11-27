@@ -100,6 +100,14 @@ public:
 		return m_free.size();
 	}
 
+	size_t GetLargestFree()
+	{
+		std::lock_guard<std::mutex> lock(m_mutex);
+		size_t largest = 0;
+		for(const auto& range : m_free) if(range.second > largest) largest = range.second;
+		return largest;
+	}
+
 	size_t GetCapacity() const
 	{
 		return m_size;

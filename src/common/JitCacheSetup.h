@@ -12,7 +12,8 @@ namespace JitCacheSetup
 	// cachePath: the game's cache file. executablePath: this program's file
 	// (app0:eboot.bin on the Vita, /proc/self/exe on Linux). Returns false
 	// when the cache can't be used here (not 32-bit ARM, no segments, I/O).
-	bool Open(const std::string& cachePath, const std::string& executablePath);
+	bool Open(const std::string& cachePath, const std::string& executablePath, const std::string& configuration = {}, bool isolate = false);
+	std::string DescribeOpen();
 	void Close();
 	// One line: entries loaded, hits, stored, uncacheable, failures.
 	std::string Describe();

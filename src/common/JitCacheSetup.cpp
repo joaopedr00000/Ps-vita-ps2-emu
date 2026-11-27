@@ -1,5 +1,6 @@
 #include "JitCacheSetup.h"
 #include <cstdio>
+#include <cstring>
 #include <vector>
 #include "JitCache.h"
 #include "BasicBlock.h"
@@ -16,6 +17,7 @@
 
 namespace
 {
+	std::string g_openDescription = "cache not opened";
 	std::vector<CJitCache::RANGE> GetImageRanges()
 	{
 		std::vector<CJitCache::RANGE> ranges;
@@ -102,14 +104,52 @@ namespace
 	}
 }
 
-bool JitCacheSetup::Open(const std::string& cachePath, const std::string& executablePath)
+bool JitCacheSetup::Open(const std::string& cachePath, const std::string& executablePath, const std::string& configuration, bool isolate)
 {
+	g_openDescription = "cache unsupported";
 	if(!CJitCache::IsSupported()) return false;
 	auto ranges = GetImageRanges();
+	g_openDescription = "no image ranges";
 	if(ranges.empty()) return false;
 	auto fingerprint = Fingerprint(executablePath);
+	g_openDescription = "executable fingerprint failed";
 	if(!fingerprint) return false;
-	return CJitCache::GetInstance().Open(cachePath, fingerprint, ranges);
+	if(!configuration.empty()) fingerprint = XXH3_64bits_withSeed(configuration.data(), configuration.size(), fingerprint);
+	char id[32];
+	std::snprintf(id, sizeof(id), "%016llx", static_cast<unsigned long long>(fingerprint));
+	const std::string actualPath = isolate ? cachePath + "-" + id + ".jit" : cachePath;
+	g_openDescription = "cache_path=" + actualPath + "\nfingerprint=" + id + "\nconfig=" + configuration;
+	long length = -1;
+	if(FILE* f = std::fopen(actualPath.c_str(), "rb"))
+	{
+		char magic[8] = {};
+		uint64 stored = 0;
+		uint32 count = 0;
+		const char expected[8] = {'V','S','2','J','I','T','C',1};
+		bool valid = std::fread(magic,1,8,f)==8 && std::fread(&stored,1,8,f)==8 &&
+		             std::fread(&count,1,4,f)==4 && std::memcmp(magic, expected, 8)==0 &&
+		             stored==fingerprint && count==ranges.size();
+		for(size_t i=0; valid && i<ranges.size(); ++i)
+		{
+			uint32 bytes=0;
+			valid = std::fread(&bytes,1,4,f)==4 && bytes==ranges[i].size;
+		}
+		if(std::fseek(f,0,SEEK_END)==0) length=std::ftell(f);
+		std::fclose(f);
+		g_openDescription += "\nheader_valid=" + std::to_string(valid);
+		// Never truncate a suspect isolated cache, even if the core would
+		// normally replace it. Keep it for inspection and run without disk cache.
+		if(isolate && !valid) { g_openDescription += "\nrejected_existing_cache=1"; return false; }
+	}
+	g_openDescription += "\nexisting_bytes=" + std::to_string(length);
+	const bool ok = CJitCache::GetInstance().Open(actualPath, fingerprint, ranges);
+	g_openDescription += "\nopen_ok=" + std::to_string(ok);
+	return ok;
+}
+
+std::string JitCacheSetup::DescribeOpen()
+{
+	return g_openDescription;
 }
 
 void JitCacheSetup::Close()

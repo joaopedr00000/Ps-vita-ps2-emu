@@ -16,6 +16,7 @@ unsigned int VitaJit_GetFlushCount();
 std::string VitaJit_GetDiagnostics();
 size_t VitaJit_GetUsedBytes();
 size_t VitaJit_GetCapacity();
+size_t VitaJit_GetLargestFree();
 
 // Counters since start, for perf.csv.
 struct VITAJIT_STATS

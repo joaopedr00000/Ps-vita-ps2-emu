@@ -93,7 +93,9 @@ bool VitaJit_Init(size_t minSize, size_t maxSize)
 		g_block = sceKernelAllocMemBlockForVM("VitaPS2_JIT", poolSize);
 		if(g_block >= 0) break;
 		lastError = g_block;
-		std::printf("sceKernelAllocMemBlockForVM(%u MB) failed: 0x%08X\n", static_cast<unsigned int>(poolSize / MB), static_cast<unsigned int>(lastError));
+		std::snprintf(buffer, sizeof(buffer), "VM allocation %u MB failed: 0x%08X\n", static_cast<unsigned>(poolSize / MB), static_cast<unsigned>(lastError));
+		g_diagnostics += buffer;
+		std::printf("%s", buffer);
 		if(poolSize <= minSize)
 		{
 			std::snprintf(buffer, sizeof(buffer), "sceKernelAllocMemBlockForVM failed for %u..%u MB, last error 0x%08X\n",
@@ -103,7 +105,9 @@ bool VitaJit_Init(size_t minSize, size_t maxSize)
 		}
 		poolSize = std::max(minSize, poolSize - 4 * MB);
 	}
-	std::printf("JIT pool: %u MB\n", static_cast<unsigned int>(poolSize / MB));
+	std::snprintf(buffer, sizeof(buffer), "JIT pool: %u MB (requested %u MB)\n", static_cast<unsigned>(poolSize / MB), static_cast<unsigned>(maxSize / MB));
+	g_diagnostics += buffer;
+	std::printf("%s", buffer);
 	void* base = nullptr;
 	if(sceKernelGetMemBlockBase(g_block, &base) < 0)
 	{
@@ -121,6 +125,11 @@ size_t VitaJit_GetUsedBytes()
 size_t VitaJit_GetCapacity()
 {
 	return g_pool.GetCapacity();
+}
+
+size_t VitaJit_GetLargestFree()
+{
+	return g_pool.GetLargestFree();
 }
 
 extern "C" void* vitaps2_jit_alloc(size_t size)

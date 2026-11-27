@@ -19,6 +19,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <dirent.h>
 #include <fstream>
 #include <sstream>
@@ -162,7 +163,7 @@ namespace
 	// Scripted runs (e.g. from Vita Lab): see ReadAutostart.
 	constexpr const char* AUTOSTART_PATH = VITAPS2_DATA_DIR "/autostart.txt";
 	constexpr const char* AUTOSTART_DONE_PATH = VITAPS2_DATA_DIR "/autostart.done";
-	constexpr const char* PERF_PATH = VITAPS2_DATA_DIR "/r4-perf.csv";
+	constexpr const char* PERF_PATH = VITAPS2_DATA_DIR "/r5-perf.csv";
 	uint64_t g_presentUs = 0; //frontend frame drawing + vglSwapBuffers (perf.csv)
 	// gxm_drain_every=N (0 = off): after every Nth present the UI thread waits in glFinish
 	// (sceGxmFinish: all submitted scenes done) and times it. A controlled measurement: it is an
@@ -269,7 +270,7 @@ namespace
 			BeginFrame();
 			Gfx::Text(40, 70, COLOR_ACCENT, 1.3f, title.c_str());
 			Gfx::Text(40, 130, COLOR_WHITE, 0.85f, body.c_str());
-			Gfx::Text(40, 510, COLOR_GREY, 0.8f, "Press X to continue");
+			Gfx::Text(40, 510, COLOR_GREY, 0.8f, "Pressione X para continuar");
 			EndFrame();
 		}
 	}
@@ -367,7 +368,7 @@ namespace
 		else if(key == "tier2_verify")
 		{
 			Tier2::g_settings.verify = value != 0;
-			Tier2::g_settings.verifyPath = VITAPS2_DATA_DIR "/r4-tier2verify.txt";
+			Tier2::g_settings.verifyPath = VITAPS2_DATA_DIR "/r5-tier2verify.txt";
 		}
 		else if(key == "tier2_exits") Tier2::g_settings.exits = static_cast<uint32>(value);
 		else if(key == "tier2_depth") Tier2::g_settings.maxCallDepth = std::max(0, static_cast<int>(value));
@@ -499,7 +500,7 @@ namespace
 	GAME_SETTINGS LoadSettings(const std::string& gamePath, const CGameProfiles::PROFILE* profile, bool& tuned, bool& playerFile)
 	{
 		GAME_SETTINGS settings;
-		// R4: conservative synchronization, independent opt-in experiments.
+		// R5: conservative synchronization; isolate the SPU2 mixer from VU1 when possible.
 		// VIF register/memory and PATH3 ordering fences remain enabled.
 		CVpu::g_asyncVif1 = false;
 		CVpu::g_asyncPath3Sync = true;
@@ -515,7 +516,7 @@ namespace
 		settings.iopThread = false;
 		settings.iopCore = 1;
 		settings.iopPriority = 170;
-		settings.spuCore = 2;
+		settings.spuCore = 3;
 		if(profile)
 		{
 			for(const auto& [key, value] : *profile) ApplySetting(settings, key, value);
@@ -645,32 +646,32 @@ namespace
 
 			{
 				char lines[ITEM_COUNT][96];
-				std::snprintf(lines[ITEM_RESUME], 96, "Resume");
+				std::snprintf(lines[ITEM_RESUME], 96, "Continuar");
 				if(settings.eeCycleRate == 0)
-					std::snprintf(lines[ITEM_EE_RATE], 96, "EE cycle rate: Auto, now %u%%  (lowered while the EE is the bottleneck)", autoRate.GetRate());
+					std::snprintf(lines[ITEM_EE_RATE], 96, "Ciclos EE: Auto, agora %u%% (ajuste automatico)", autoRate.GetRate());
 				else
-					std::snprintf(lines[ITEM_EE_RATE], 96, "EE cycle rate: %u%%  (lower = faster, may slow game logic)", settings.eeCycleRate);
-				std::snprintf(lines[ITEM_INTERLACED], 96, "Interlaced rendering: %s  (software renderer)", settings.interlaced ? "On" : "Off");
-				std::snprintf(lines[ITEM_FRAMESKIP], 96, "Frame skip: %u", settings.frameSkip);
-				std::snprintf(lines[ITEM_STRETCH], 96, "Aspect: %s", settings.stretch ? "Stretch 16:9" : "4:3");
-				std::snprintf(lines[ITEM_STATS], 96, "Performance overlay: %s", settings.showStats ? "On" : "Off");
-				std::snprintf(lines[ITEM_RENDERER], 96, "Renderer: %s  (applies when the game restarts)", settings.softwareRenderer ? "Software" : "GPU");
-				std::snprintf(lines[ITEM_VU1_THREAD], 96, "VU1 on its own core: %s  (faster 3D; turn off if a game glitches)", settings.threadedVu1 ? "On" : "Off");
-				std::snprintf(lines[ITEM_SPU_THREAD], 96, "Audio on its own core: %s  (faster; turn off if sound glitches)", settings.threadedSpu ? "On" : "Off");
-				std::snprintf(lines[ITEM_SAFE_JIT], 96, "Safe JIT: %s  (slower; try if a game hangs - applies on restart)", settings.safeJit ? "On" : "Off");
-				std::snprintf(lines[ITEM_QUIT], 96, "Quit to game list");
+					std::snprintf(lines[ITEM_EE_RATE], 96, "Ciclos EE: %u%% (menos ciclos pode alterar o jogo)", settings.eeCycleRate);
+				std::snprintf(lines[ITEM_INTERLACED], 96, "Imagem entrelacada: %s (software)", settings.interlaced ? "Ligado" : "Desligado");
+				std::snprintf(lines[ITEM_FRAMESKIP], 96, "Pular quadros: %u", settings.frameSkip);
+				std::snprintf(lines[ITEM_STRETCH], 96, "Proporcao: %s", settings.stretch ? "Esticar 16:9" : "4:3");
+				std::snprintf(lines[ITEM_STATS], 96, "Mostrar desempenho: %s", settings.showStats ? "Ligado" : "Desligado");
+				std::snprintf(lines[ITEM_RENDERER], 96, "Renderizador: %s (reinicie o jogo)", settings.softwareRenderer ? "Software" : "GPU");
+				std::snprintf(lines[ITEM_VU1_THREAD], 96, "VU1 em nucleo separado: %s (desligue se falhar)", settings.threadedVu1 ? "Ligado" : "Desligado");
+				std::snprintf(lines[ITEM_SPU_THREAD], 96, "Audio em nucleo separado: %s", settings.threadedSpu ? "Ligado" : "Desligado");
+				std::snprintf(lines[ITEM_SAFE_JIT], 96, "JIT seguro: %s (mais lento, reinicie o jogo)", settings.safeJit ? "Ligado" : "Desligado");
+				std::snprintf(lines[ITEM_QUIT], 96, "Voltar a lista de jogos");
 
 				BeginFrame();
 				DrawScreen(screen, settings.stretch);
 				Gfx::Rect(90, 60, 780, 440, Gfx::Rgba(10, 12, 24, 220));
-				Gfx::Text(120, 100, COLOR_ACCENT, 1.1f, "Paused");
+				Gfx::Text(120, 100, COLOR_ACCENT, 1.1f, "Pausado");
 				for(int i = 0; i < ITEM_COUNT; i++)
 				{
 					int y = 135 + i * 27;
 					if(i == selected) Gfx::Rect(110, y - 21, 740, 27, COLOR_SELECTION);
 					Gfx::Text(125, y, (i == selected) ? COLOR_WHITE : COLOR_GREY, 0.8f, lines[i]);
 				}
-				Gfx::Text(120, 480, COLOR_GREY, 0.7f, "LEFT/RIGHT: change   X: select   O: resume");
+				Gfx::Text(120, 480, COLOR_GREY, 0.7f, "ESQ/DIR: alterar   X: selecionar   O: continuar");
 				EndFrame();
 			}
 		}
@@ -697,7 +698,7 @@ namespace
 		std::vector<std::string> lines;
 		auto draw = [&](const char* status) {
 			BeginFrame();
-			Gfx::Text(30, 45, COLOR_ACCENT, 1.2f, "GS benchmark (Mpix/s)  build " VITAPS2_BUILD);
+			Gfx::Text(30, 45, COLOR_ACCENT, 1.2f, "Teste GS (Mpix/s)  versao " VITAPS2_BUILD);
 			for(size_t i = 0; i < lines.size(); i++)
 			{
 				Gfx::Text(30, 80 + static_cast<int>(i) * 20, COLOR_WHITE, 0.7f, lines[i].c_str());
@@ -783,7 +784,7 @@ namespace
 
 			float seconds = static_cast<float>(sceKernelGetProcessTimeWide() % 100000000000ULL) / 1000000.0f;
 			BeginFrame();
-			Theme::Browser(games, selected, scroll, visible, seconds, "PlayStation 2 emulator  build " VITAPS2_BUILD, GAMES_PATH);
+			Theme::Browser(games, selected, scroll, visible, seconds, "Emulador de PlayStation 2  versao " VITAPS2_BUILD, GAMES_PATH);
 			EndFrame();
 		}
 	}
@@ -885,6 +886,8 @@ namespace
 		// Experimental controls applied on every boot (not saved over game settings).
 		// Only allow known A/B settings; globals get reset between games.
 		bool diagnosticLogs = true;
+		bool detailedOverlay = false;
+		size_t jitSoftLimit = 0;
 		bool experimentAutoTune = false;
 		int experimentGsFlips = 60;
 		uint32_t experimentGsAfter = 20;
@@ -898,6 +901,8 @@ namespace
 				auto key = line.substr(0, eq), value = line.substr(eq + 1);
 				if(key == "diagnostic_logs") diagnosticLogs = value != "0";
 				else if(key == "auto_tune") experimentAutoTune = value == "1";
+				else if(key == "detailed_overlay") detailedOverlay = value == "1";
+				else if(key == "jit_limit_kb") jitSoftLimit = static_cast<size_t>(std::clamp(std::atoi(value.c_str()), 0, 48 * 1024)) * 1024;
 				else if(key == "gs_diag") experimentGsFlips = std::clamp(std::atoi(value.c_str()), 0, 300);
 				else if(key == "gs_diag_after") experimentGsAfter = static_cast<uint32_t>(std::clamp(std::atoi(value.c_str()), 0, 3600));
 				else if(key == "performance_mode" && value == "0")
@@ -918,6 +923,8 @@ namespace
 				else if(key == "iop_thread" || key == "iop_core" || key == "iop_priority" ||
 				        key == "vu1_vblank_sync" || key == "vu1_spin_us" || key == "ee_slice" ||
 				        key == "gs_frames_ahead" || key == "jit_cache" ||
+				        key == "bulk_unpack" || key == "bulk_unpack_neon" || key == "vu_loop_variant" || key == "vu_stall_check" ||
+				        key == "vu_vector_opmul" || key == "vu_flag_tracking" || key == "readback_neon" || key == "readback_neon_check" ||
 				        key == "block_coherency" || key == "group_block_readbacks" ||
 				        key == "tier2" || key == "tier2_hot" || key == "tier2_blocks" || key == "tier2_max" || key == "tier2_verify" ||
 				        key == "threaded_vu1" || key == "threaded_spu" || key == "spu_core" ||
@@ -929,6 +936,18 @@ namespace
 					std::printf("experiment %s=%s\n", key.c_str(), value.c_str());
 				}
 			}
+		}
+		VitaJit_SetSoftLimit(jitSoftLimit);
+		// A fresh session marker is written before the VM is created, even if
+		// boot fails. Keep the previous marker and never touch R4 logs.
+		const auto sessionId = std::to_string(static_cast<unsigned long long>(std::time(nullptr))) + "-" +
+		                       std::to_string(static_cast<unsigned long long>(sceKernelGetProcessTimeWide()));
+		sceIoRemove(VITAPS2_DATA_DIR "/r5-latest-prev.txt");
+		sceIoRename(VITAPS2_DATA_DIR "/r5-latest.txt", VITAPS2_DATA_DIR "/r5-latest-prev.txt");
+		if(FILE* marker = std::fopen(VITAPS2_DATA_DIR "/r5-latest.txt", "w"))
+		{
+			std::fprintf(marker, "build=%s\nsession_id=%s\ngame=%s\n", VITAPS2_BUILD, sessionId.c_str(), path.c_str());
+			std::fclose(marker);
 		}
 		// First boot of a game the player has not configured: try the speed
 		// settings that help some games and hurt others (scripted runs only with
@@ -1058,8 +1077,8 @@ namespace
 		}
 		if(diagnosticLogs || autostart)
 		{
-			sceIoRemove(VITAPS2_DATA_DIR "/r4-perf-prev.csv");
-			sceIoRename(PERF_PATH, VITAPS2_DATA_DIR "/r4-perf-prev.csv");
+			sceIoRemove(VITAPS2_DATA_DIR "/r5-perf-prev.csv");
+			sceIoRename(PERF_PATH, VITAPS2_DATA_DIR "/r5-perf-prev.csv");
 			perfFile = std::fopen(PERF_PATH, "w");
 			if(perfFile)
 			{
@@ -1076,7 +1095,7 @@ namespace
 			}
 		}
 		const uint64_t runStart = sceKernelGetProcessTimeWide();
-		constexpr const char* GS_DIAG_PATH = VITAPS2_DATA_DIR "/r4-gsdiag.txt";
+		constexpr const char* GS_DIAG_PATH = VITAPS2_DATA_DIR "/r5-gsdiag.txt";
 		int gsDiagFlips = (!autostart && diagnosticLogs && !settings.softwareRenderer) ? experimentGsFlips : 0;
 		uint32_t gsDiagAfterSeconds = experimentGsAfter;
 		if(autostart) gsDiagAfterSeconds = 0;
@@ -1213,7 +1232,7 @@ namespace
 				bool layout = TargetPixels::GetBlockLayout(CGSHandler::PSMCT16).columns16 &&
 				              TargetPixels::GetBlockLayout(CGSHandler::PSMCT16S).columns16;
 				TargetPixels::g_neonColumns16 = failures == 0 && layout;
-				if(FILE* test = std::fopen(VITAPS2_DATA_DIR "/r4-gs16.txt", "w"))
+				if(FILE* test = std::fopen(VITAPS2_DATA_DIR "/r5-gs16.txt", "w"))
 				{
 					std::fprintf(test, "build=%s failures=%u layout=%d enabled=%d\n", VITAPS2_BUILD, failures, layout, TargetPixels::g_neonColumns16);
 					std::fclose(test);
@@ -1232,8 +1251,19 @@ namespace
 			if(settings.jitCache)
 			{
 				auto slash = path.find_last_of('/');
-				std::string cachePath = std::string(JIT_CACHE_PATH) + "/" + path.substr(slash + 1) + ".jit";
-				jitCacheOpened = JitCacheSetup::Open(cachePath, "app0:eboot.bin");
+				std::string cachePath = std::string(JIT_CACHE_PATH) + "/" + path.substr(slash + 1) + ".r5";
+				// Code-affecting VU options must not share a native cache.
+				const std::string vuMode = std::to_string(CVuBasicBlock::g_extraCompileHints) + ":" +
+				                           std::to_string(CVuBasicBlock::g_loopVariant) + ":" +
+				                           std::to_string(CVuBasicBlock::g_combinedStallCheck) + ":" +
+				                           std::to_string(VUShared::g_vectorOuterProduct) + ":" +
+				                           std::to_string(VUShared::g_flagTracking);
+				jitCacheOpened = JitCacheSetup::Open(cachePath, "app0:eboot.bin", vuMode, true);
+				if(FILE* cacheLog = std::fopen(VITAPS2_DATA_DIR "/r5-jit.txt", "w"))
+				{
+					std::fprintf(cacheLog, "session_id=%s\n%s\n%s\n", sessionId.c_str(), JitCacheSetup::DescribeOpen().c_str(), JitCacheSetup::Describe().c_str());
+					std::fclose(cacheLog);
+				}
 				std::printf("jit cache %s: %s\n", cachePath.c_str(), jitCacheOpened ? JitCacheSetup::Describe().c_str() : "not available");
 			}
 			session->Boot(path);
@@ -1386,9 +1416,9 @@ namespace
 			session.reset();
 			if(perfFile) std::fclose(perfFile);
 			if(jitCacheOpened) JitCacheSetup::Close();
-			if(FILE* bootError = std::fopen(VITAPS2_DATA_DIR "/r4-boot-error.txt", "w")) { std::fprintf(bootError, "%s: %s\n", VITAPS2_BUILD, e.what()); std::fclose(bootError); }
+			if(FILE* bootError = std::fopen(VITAPS2_DATA_DIR "/r5-boot-error.txt", "w")) { std::fprintf(bootError, "%s: %s\n", VITAPS2_BUILD, e.what()); std::fclose(bootError); }
 			std::printf("Boot error: %s\n", e.what());
-			ShowMessage("Failed to boot", e.what());
+			ShowMessage("Falha ao iniciar o jogo", e.what());
 			return;
 		}
 
@@ -1409,17 +1439,20 @@ namespace
 		FILE* sessionLog = nullptr;
 		if(diagnosticLogs || autostart)
 		{
-			hardwareLog = std::fopen(VITAPS2_DATA_DIR "/r4-hardware.csv", "w");
-			threadsLog = std::fopen(VITAPS2_DATA_DIR "/r4-threads.csv", "w");
+			hardwareLog = std::fopen(VITAPS2_DATA_DIR "/r5-hardware.csv", "w");
+			threadsLog = std::fopen(VITAPS2_DATA_DIR "/r5-threads.csv", "w");
 			// stdout/stderr redirection is unreliable on this Vita libc. Write
 			// the essential session records to an independent stream.
-			sceIoRemove(VITAPS2_DATA_DIR "/r4-session-prev.txt");
-			sceIoRename(VITAPS2_DATA_DIR "/r4-session.txt", VITAPS2_DATA_DIR "/r4-session-prev.txt");
-			sessionLog = std::fopen(VITAPS2_DATA_DIR "/r4-session.txt", "w");
+			sceIoRemove(VITAPS2_DATA_DIR "/r5-session-prev.txt");
+			sceIoRename(VITAPS2_DATA_DIR "/r5-session.txt", VITAPS2_DATA_DIR "/r5-session-prev.txt");
+			sessionLog = std::fopen(VITAPS2_DATA_DIR "/r5-session.txt", "w");
 			if(sessionLog)
 			{
-				std::fprintf(sessionLog, "build=%s\ngame=%s\nserial=%s\njit_open=%d\n%s\n",
-				             VITAPS2_BUILD, path.c_str(), discSerial.c_str(), jitCacheOpened, JitCacheSetup::Describe().c_str());
+				std::fprintf(sessionLog, "build=%s\nsession_id=%s\ngame=%s\nserial=%s\njit_open=%d\n%s\n",
+				             VITAPS2_BUILD, sessionId.c_str(), path.c_str(), discSerial.c_str(), jitCacheOpened, JitCacheSetup::Describe().c_str());
+				std::fprintf(sessionLog, "%s\n%s\njit_capacity_kb=%u soft_limit_kb=%u\n", JitCacheSetup::DescribeOpen().c_str(),
+				             VitaJit_GetDiagnostics().c_str(), static_cast<unsigned>(VitaJit_GetCapacity()/1024),
+				             static_cast<unsigned>(jitSoftLimit/1024));
 				std::fprintf(sessionLog, "async_vif1=%d vblank_sync=%d spin_us=%u iop_thread=%d iop_core=%u spu_core=%u lazy_textures=%d keep_batch=%d core3=%d\n",
 				             CVpu::g_asyncVif1, Ee::CSubSystem::g_vblankVu1Sync, CVpu::g_workerSpinUs,
 				             settings.iopThread, settings.iopCore, settings.spuCore, CTextureCache::g_lazyTexels,
@@ -1556,7 +1589,7 @@ namespace
 				}
 				stateRetries = 0;
 				if(ok && stateIsLoad && gpu) GetHardwareGs(session.get())->DiscardGpuCopies();
-				stateMessage = std::string(stateIsLoad ? "State loaded" : "State saved") + (ok ? "" : " - FAILED");
+				stateMessage = std::string(stateIsLoad ? "Estado carregado" : "Estado salvo") + (ok ? "" : " - FALHOU");
 				stateMessageUntil = sceKernelGetProcessTimeWide() + 2000000;
 				std::printf("%s: %s\n", stateMessage.c_str(), StatePath(path).c_str());
 				newContent = true;
@@ -1655,6 +1688,9 @@ namespace
 					             static_cast<unsigned>(VitaJit_GetUsedBytes() / 1024),
 					             (unsigned long long)CGSH_Hardware::g_blockReadbackCalls, (unsigned long long)CGSH_Hardware::g_blockReadBacks);
 					lastSessionGameFrames = gameFrames;
+					std::fprintf(sessionLog, " jit_capacity_kb=%u jit_largest_free_kb=%u jit_flushes=%u",
+					             static_cast<unsigned>(VitaJit_GetCapacity()/1024),
+					             static_cast<unsigned>(VitaJit_GetLargestFree()/1024), VitaJit_GetFlushCount());
 					for(const auto& usage : threadUsage)
 						std::fprintf(sessionLog, " %s:%.1f@%08X", usage.name.c_str(), usage.cpuPercent, static_cast<unsigned>(usage.affinityMask));
 					std::fprintf(sessionLog, "\n");
@@ -2155,6 +2191,7 @@ namespace
 						detail += "\n";
 					}
 					stallDetail = detail;
+					if(sessionLog) { std::fprintf(sessionLog, "%s", detail.c_str()); std::fflush(sessionLog); }
 					std::printf("%s", detail.c_str());
 					stallPcs.clear();
 				}
@@ -2188,9 +2225,9 @@ namespace
 				int lines = 7 + static_cast<int>(threadUsage.size());
 				Gfx::Rect(0, 0, 640, 10 + lines * 20, Gfx::Rgba(0, 0, 0, 160));
 				std::string ipuLine;
-				Gfx::Textf(8, 20, COLOR_WHITE, 0.7f, "VM %.1f fps  out %.1f fps  %ux%u  " VITAPS2_BUILD, vmFps, presentFps, screen.width, screen.height);
+				Gfx::Textf(8, 20, COLOR_WHITE, 0.7f, "VM %.1f fps  imagem %.1f fps  %ux%u  " VITAPS2_BUILD, vmFps, presentFps, screen.width, screen.height);
 				uint32_t eeRate = (settings.eeCycleRate == 0) ? autoRate.GetRate() : settings.eeCycleRate;
-				Gfx::Textf(8, 40, COLOR_GREY, 0.7f, "EE idle %.0f%%  rate %u%%%s  JIT %u/%u KB  %s", session->GetEeIdleRatio() * 100.0f,
+				Gfx::Textf(8, 40, COLOR_GREY, 0.7f, "EE ocioso %.0f%%  ciclos %u%%%s  JIT %u/%u KB  %s", session->GetEeIdleRatio() * 100.0f,
 				           eeRate, (settings.eeCycleRate == 0) ? " auto" : "",
 				           static_cast<unsigned int>(VitaJit_GetUsedBytes() / 1024),
 				           static_cast<unsigned int>(VitaJit_GetCapacity() / 1024),
@@ -2198,12 +2235,12 @@ namespace
 				if(gpu)
 				{
 					auto stats = GetHardwareGs(session.get())->GetLastFrameStats();
-					Gfx::Textf(8, 60, COLOR_GREY, 0.7f, "GPU draws %u  tex %u  rt dl %u up %u  ~blend %u", stats.drawCalls,
+					Gfx::Textf(8, 60, COLOR_GREY, 0.7f, "GPU desenhos %u  tex %u  leit %u grav %u  ~blend %u", stats.drawCalls,
 					           stats.textureUploads, stats.targetDownloads, stats.targetUploads, stats.approximateBlends);
 				}
 				else
 				{
-					Gfx::Text(8, 60, COLOR_GREY, 0.7f, "Software renderer");
+					Gfx::Text(8, 60, COLOR_GREY, 0.7f, "Renderizador por software");
 				}
 				{
 					//SPU thread waits per second (full syncs / register reads waiting on the mixer)
@@ -2220,7 +2257,7 @@ namespace
 						spuLastRead = readWaits;
 						spuRateTime = now;
 					}
-					Gfx::Textf(8, 80, COLOR_GREY, 0.7f, "Audio tempo %.0f%%  underruns %u  spu waits/s %u+%u", CSH_Vita::GetTempo() * 100.0f,
+					Gfx::Textf(8, 80, COLOR_GREY, 0.7f, "Audio ritmo %.0f%%  falhas %u  esperas SPU/s %u+%u", CSH_Vita::GetTempo() * 100.0f,
 					           CSH_Vita::GetUnderruns(), spuFullRate, spuReadRate);
 				}
 				{
@@ -2249,10 +2286,12 @@ namespace
 				if(gpu)
 				{
 					const auto& d = displayLastSecond;
-					Gfx::Textf(8, 100, COLOR_GREY, 0.7f, "Display/s: gpu %u  mem %u  skip %u  off %u  buf %05X w%u psm%X y%u", d.fromTarget,
+					Gfx::Textf(8, 100, COLOR_GREY, 0.7f, "Imagem/s: gpu %u  mem %u  skip %u  off %u  buf %05X w%u psm%X y%u", d.fromTarget,
 					           d.fromMemory, d.skipped, d.disabled, d.bufPtr, d.bufWidth, d.psm, d.offsetY);
 				}
-				if(!stallSummary.empty())
+				if(!stallSummary.empty() && !detailedOverlay)
+					Gfx::Text(8, 290, COLOR_WARN, 0.7f, "Sem nova imagem. Diagnostico salvo em r5-session.txt.");
+				if(!stallSummary.empty() && detailedOverlay)
 				{
 					// Long line: wrap it under the overlay.
 					std::string wrapped = stallSummary;
@@ -2261,7 +2300,7 @@ namespace
 					Gfx::Text(8, 345, COLOR_WARN, 0.6f, stallDetail.c_str());
 				}
 				Gfx::Text(8, 120, COLOR_ACCENT, 0.7f, profileLine.c_str());
-				Gfx::Text(8, 140, COLOR_ACCENT, 0.7f, "CPU per thread (100% = one core):");
+				Gfx::Text(8, 140, COLOR_ACCENT, 0.7f, "CPU por thread (100% = um nucleo):");
 				int line = 0;
 				for(const auto& usage : threadUsage)
 				{
@@ -2332,14 +2371,22 @@ namespace
 		}
 
 		mpegHle.Disable();
+		// Stop the VM before closing its cache; no compiler may still be
+		// writing while the file is being closed.
+		session->Pause();
+		mpegShadow.Disable();
+		session.reset();
+		sessionPtr = nullptr;
+		if(sessionLog)
+		{
+			std::fprintf(sessionLog, "session_end=%s\n%s\n", sessionId.c_str(), JitCacheSetup::Describe().c_str());
+			std::fflush(sessionLog);
+		}
 		if(settings.jitCache)
 		{
 			std::printf("%s\n", JitCacheSetup::Describe().c_str());
 			JitCacheSetup::Close();
 		}
-		mpegShadow.Disable();
-		session.reset();
-		sessionPtr = nullptr;
 		if(perfFile) std::fclose(perfFile);
 		if(hardwareLog) std::fclose(hardwareLog);
 		if(threadsLog) std::fclose(threadsLog);
@@ -2426,19 +2473,32 @@ int main()
 	sceIoMkdir(JIT_CACHE_PATH, 0777);
 
 	// Before vitaGL, which takes most of the remaining memory for its pools.
-	if(!VitaJit_Init(JIT_POOL_MIN, JIT_POOL_MAX))
+	size_t requestedJitMax = JIT_POOL_MAX;
+	{
+		std::ifstream options(VITAPS2_DATA_DIR "/experiment.ini");
+		std::string line;
+		while(std::getline(options, line))
+			if(line.rfind("jit_pool_max_mb=", 0) == 0)
+				requestedJitMax = static_cast<size_t>(std::clamp(std::atoi(line.c_str()+16), 8, 48)) * 1024 * 1024;
+	}
+	if(!VitaJit_Init(JIT_POOL_MIN, requestedJitMax))
 	{
 		std::string details = VitaJit_GetDiagnostics() +
 		                      "\nIf the error is 0x80020??? check that \"Unsafe Homebrew\" is enabled\n"
 		                      "in HENkaku Settings. Please report this screen with log.txt.";
-		CpuScreen_ShowMessage("Cannot allocate JIT memory", details);
+		CpuScreen_ShowMessage("Nao foi possivel reservar memoria JIT", details);
 		sceKernelExitProcess(0);
 		return 0;
 	}
 
+	if(FILE* startup = std::fopen(VITAPS2_DATA_DIR "/r5-jit-pool.txt", "w"))
+	{
+		std::fprintf(startup, "build=%s\n%s\n", VITAPS2_BUILD, VitaJit_GetDiagnostics().c_str());
+		std::fclose(startup);
+	}
 	if(!HasShaderCompiler())
 	{
-		CpuScreen_ShowMessage("Missing libshacccg.suprx",
+		CpuScreen_ShowMessage("Falta libshacccg.suprx",
 		                      "VitaPS2 draws with vitaGL, which needs the runtime shader compiler.\n"
 		                      "Extract it with ShaRKBR33D (or SharkF00D) so that this file exists:\n"
 		                      "  ur0:data/libshacccg.suprx\n\n"
@@ -2455,12 +2515,12 @@ int main()
 	// Compiled fixed-function shaders are cached so they are only built once.
 	sceIoMkdir(VITAPS2_DATA_DIR "/shaders", 0777);
 	vglSetShaderCachePath(VITAPS2_DATA_DIR "/shaders/");
-	CGSH_Hardware::g_glObjectDumpPath = VITAPS2_DATA_DIR "/r4-globjects.txt";
+	CGSH_Hardware::g_glObjectDumpPath = VITAPS2_DATA_DIR "/r5-globjects.txt";
 	vglInitExtended(0x80000, SCREEN_WIDTH, SCREEN_HEIGHT, GL_RAM_LEFT_FREE, SCE_GXM_MULTISAMPLE_NONE);
 	vglWaitVblankStart(GL_TRUE);
 	if(!Gfx::Init())
 	{
-		CpuScreen_ShowMessage("Graphics initialization failed", "vitaGL could not create the UI textures.\nPlease report this with log.txt.");
+		CpuScreen_ShowMessage("Falha na inicializacao grafica", "vitaGL could not create the UI textures.\nPlease report this with log.txt.");
 		sceKernelExitProcess(0);
 		return 0;
 	}
@@ -2490,7 +2550,7 @@ int main()
 	}
 	catch(const std::exception& e)
 	{
-		ShowMessage("Initialization failed", e.what());
+		ShowMessage("Falha na inicializacao", e.what());
 	}
 
 	{

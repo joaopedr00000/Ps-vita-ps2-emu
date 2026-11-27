@@ -1,0 +1,37 @@
+diff --git a/Source/JitCache.cpp b/Source/JitCache.cpp
+--- a/Source/JitCache.cpp
++++ b/Source/JitCache.cpp
+@@ -170,18 +170,31 @@
+ 	size_t position = 8 + 8 + 4 + (m_ranges.size() * 4);
+ 	m_fileSize = position;
++	// Read sequentially through the existing 64 KiB stdio buffer.
++	// Seeking for every small block can discard read-ahead on Vita libc.
++	uint8 skip[4096];
++	if(length < 0 || static_cast<size_t>(length) < position) { std::fclose(file); m_fileSize = 0; return; }
++	const size_t fileLength = static_cast<size_t>(length);
+ 	while(true)
+ 	{
+ 		uint32 recordSize = 0;
+ 		KEY key;
+-		if(!read(&recordSize, 4) || (recordSize < sizeof(KEY)) || (position + 4 + recordSize > static_cast<size_t>(length))) break;
++		if(fileLength - position < 4 || !read(&recordSize, 4) || recordSize < sizeof(KEY) || recordSize > fileLength - position - 4) break;
+ 		if(!read(&key, sizeof(key))) break;
++		size_t remaining = recordSize - sizeof(KEY);
++		bool complete = true;
++		while(remaining)
++		{
++			const size_t chunk = remaining < sizeof(skip) ? remaining : sizeof(skip);
++			if(!read(skip, chunk)) { complete = false; break; }
++			remaining -= chunk;
++		}
++		if(!complete) break;
+ 		LOCATION location;
+ 		location.offset = static_cast<uint32>(position + 4);
+ 		location.size = recordSize;
+ 		m_index[key] = location;
+ 		position += 4 + recordSize;
+ 		m_fileSize = position;
+-		if(std::fseek(file, static_cast<long>(position), SEEK_SET) != 0) break;
+ 	}
+ 	std::fclose(file);
+ 	m_stats.loaded = static_cast<uint32>(m_index.size());

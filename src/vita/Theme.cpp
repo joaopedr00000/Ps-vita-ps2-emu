@@ -196,13 +196,13 @@ void Theme::Browser(const std::vector<std::string>& games, int selected, int scr
 	if(count <= 1)
 	{
 		Panel(28, 420, 904, 40);
-		Gfx::Textf(44, 446, TEXT, 0.75f, "Copy .iso / .cso / .chd / .elf files to %s", gamesPath);
+		Gfx::Textf(44, 446, TEXT, 0.75f, "Copie arquivos .iso / .cso / .chd / .elf para %s", gamesPath);
 	}
 	float hintX = 36;
-	hintX = Hint(hintX, 520, BUTTON_CROSS, "Play");
-	hintX = Hint(hintX, 520, BUTTON_TRIANGLE, "Refresh");
-	hintX = TextHint(hintX, 520, "SELECT", "GS benchmark");
-	TextHint(hintX, 520, "START", "Quit");
-	const char* inGame = "In game: SELECT + START for the menu";
+	hintX = Hint(hintX, 520, BUTTON_CROSS, "Jogar");
+	hintX = Hint(hintX, 520, BUTTON_TRIANGLE, "Atualizar");
+	hintX = TextHint(hintX, 520, "SELECT", "Teste GS");
+	TextHint(hintX, 520, "START", "Sair");
+	const char* inGame = "No jogo: SELECT + START abre o menu";
 	Gfx::Text(924 - Gfx::TextWidth(0.6f, inGame), 520, TEXT_DIM, 0.6f, inGame);
 }
