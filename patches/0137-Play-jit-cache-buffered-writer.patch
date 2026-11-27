@@ -1,0 +1,42 @@
+diff --git a/Source/JitCache.cpp b/Source/JitCache.cpp
+--- a/Source/JitCache.cpp
++++ b/Source/JitCache.cpp
+@@ -92,5 +92,6 @@
+ 		// New or discarded file.
+ 		m_file = std::fopen(m_path.c_str(), "wb");
++		if(m_file) { m_writeBuffer.resize(64 * 1024); std::setvbuf(m_file, m_writeBuffer.data(), _IOFBF, m_writeBuffer.size()); }
+-		if(!m_file || !WriteHeader())
++		if(!m_file || !WriteHeader() || std::fflush(m_file) != 0)
+ 		{
+ 			if(m_file) std::fclose(m_file);
+@@ -100,3 +101,5 @@
+ 		m_file = std::fopen(m_path.c_str(), "r+b");
+ 		if(!m_file) return false;
++		m_writeBuffer.resize(64 * 1024);
++		std::setvbuf(m_file, m_writeBuffer.data(), _IOFBF, m_writeBuffer.size());
+ 		// Append after the last complete record (drops a cut-off one).
+@@ -130,3 +133,4 @@
+ 	m_record = std::vector<uint8>();
+ 	m_readBuffer = std::vector<char>();
++	m_writeBuffer = std::vector<char>();
+ 	m_unflushed = 0;
+@@ -300,6 +304,9 @@
+ 	if(++m_unflushed >= FLUSH_EVERY)
+ 	{
+-		if(std::fflush(m_file) == 0) m_committedSize = m_fileSize;
+-		m_unflushed = 0;
++		if(std::fflush(m_file) == 0)
++		{
++			m_committedSize = m_fileSize;
++			m_unflushed = 0;
++		}
+ 	}
+ }
+diff --git a/Source/JitCache.h b/Source/JitCache.h
+--- a/Source/JitCache.h
++++ b/Source/JitCache.h
+@@ -140,3 +140,4 @@
+ 	std::vector<char> m_readBuffer;
++	std::vector<char> m_writeBuffer; //owned for the lifetime of the stdio stream
+ 	std::vector<uint8> m_record;
+ 	std::string m_path;

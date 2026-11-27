@@ -162,7 +162,7 @@ namespace
 	// Scripted runs (e.g. from Vita Lab): see ReadAutostart.
 	constexpr const char* AUTOSTART_PATH = VITAPS2_DATA_DIR "/autostart.txt";
 	constexpr const char* AUTOSTART_DONE_PATH = VITAPS2_DATA_DIR "/autostart.done";
-	constexpr const char* PERF_PATH = VITAPS2_DATA_DIR "/perf.csv";
+	constexpr const char* PERF_PATH = VITAPS2_DATA_DIR "/r4-perf.csv";
 	uint64_t g_presentUs = 0; //frontend frame drawing + vglSwapBuffers (perf.csv)
 	// gxm_drain_every=N (0 = off): after every Nth present the UI thread waits in glFinish
 	// (sceGxmFinish: all submitted scenes done) and times it. A controlled measurement: it is an
@@ -367,7 +367,7 @@ namespace
 		else if(key == "tier2_verify")
 		{
 			Tier2::g_settings.verify = value != 0;
-			Tier2::g_settings.verifyPath = "ux0:data/VitaPS2/tier2verify.txt";
+			Tier2::g_settings.verifyPath = VITAPS2_DATA_DIR "/r4-tier2verify.txt";
 		}
 		else if(key == "tier2_exits") Tier2::g_settings.exits = static_cast<uint32>(value);
 		else if(key == "tier2_depth") Tier2::g_settings.maxCallDepth = std::max(0, static_cast<int>(value));
@@ -464,6 +464,7 @@ namespace
 		else if(key == "skin_prefetch") CGSH_Hardware::g_skinPrefetch = value != 0; //skinning loop prefetches 8 vertices ahead (exact; on)
 		else if(key == "end_on_worker") Re4Vu1::g_endOnWorker = value != 0; //world batch ends projected where the batch is built (exact; on)
 		else if(key == "world_scratch") CGSH_Hardware::g_worldScratch = value != 0; //world slot vertices written into vitaGL stream buffer memory (off: crashed the Vita)
+		else if(key == "group_block_readbacks") CGSH_Hardware::g_groupBlockReadbacks = value != 0;
 		else if(key == "readback_finish") CGSH_Hardware::g_readbackFinish = value != 0; //the GPU finished before every target read-back (diagnostics; off: 13 to 55 ms of read-backs per game frame)
 		else if(key == "solid_readback_check") CGSH_Hardware::g_solidReadbackCheck = value != 0; //solid read-backs also read the GPU and count differences (diagnostics)
 		else if(key == "mailbox_batch") CMailBox::g_batched = value != 0; //mailboxes received in batches, senders wake only a waiting receiver (exact; on)
@@ -498,20 +499,23 @@ namespace
 	GAME_SETTINGS LoadSettings(const std::string& gamePath, const CGameProfiles::PROFILE* profile, bool& tuned, bool& playerFile)
 	{
 		GAME_SETTINGS settings;
-		// R3: experimental parallel pipeline, applied anew for every game.
+		// R4: conservative synchronization, independent opt-in experiments.
 		// VIF register/memory and PATH3 ordering fences remain enabled.
-		CVpu::g_asyncVif1 = true;
+		CVpu::g_asyncVif1 = false;
 		CVpu::g_asyncPath3Sync = true;
-		CVpu::g_workerSpinUs = 100;
-		Ee::CSubSystem::g_vblankVu1Sync = false;
-		CGSH_Hardware::g_pumpKeepBatch = true;
-		CTextureCache::g_lazyTexels = true;
+		CVpu::g_workerSpinUs = 0;
+		Ee::CSubSystem::g_vblankVu1Sync = true;
+		CGSH_Hardware::g_pumpKeepBatch = false;
+		CTextureCache::g_lazyTexels = false;
+		CGSH_Hardware::g_groupBlockReadbacks = true;
+		CGSH_Hardware::g_blockCoherency = false;
+		Tier2::g_settings.mode = Tier2::MODE_OFF;
 		CGSH_Hardware::g_readbackFinish = false;
 		TargetPixels::g_neonColumns16 = false;
-		settings.iopThread = true;
+		settings.iopThread = false;
 		settings.iopCore = 1;
 		settings.iopPriority = 170;
-		settings.spuCore = 3; // Mask() falls back to 2 when core 3 is unavailable.
+		settings.spuCore = 2;
 		if(profile)
 		{
 			for(const auto& [key, value] : *profile) ApplySetting(settings, key, value);
@@ -882,8 +886,8 @@ namespace
 		// Only allow known A/B settings; globals get reset between games.
 		bool diagnosticLogs = true;
 		bool experimentAutoTune = false;
-		int experimentGsFlips = 120;
-		uint32_t experimentGsAfter = 30;
+		int experimentGsFlips = 60;
+		uint32_t experimentGsAfter = 20;
 		{
 			std::ifstream options(VITAPS2_DATA_DIR "/experiment.ini");
 			std::string line;
@@ -898,7 +902,7 @@ namespace
 				else if(key == "gs_diag_after") experimentGsAfter = static_cast<uint32_t>(std::clamp(std::atoi(value.c_str()), 0, 3600));
 				else if(key == "performance_mode" && value == "0")
 				{
-					// Explicit rollback of R3 performance defaults.
+					// Explicit rollback of optional R4 paths.
 					CVpu::g_asyncVif1 = false;
 					CVpu::g_workerSpinUs = 0;
 					Ee::CSubSystem::g_vblankVu1Sync = true;
@@ -906,10 +910,16 @@ namespace
 					CTextureCache::g_lazyTexels = false;
 					settings.iopThread = false;
 					settings.spuCore = 2;
+					CGSH_Hardware::g_groupBlockReadbacks = false;
+					CGSH_Hardware::g_blockCoherency = false;
+					Tier2::g_settings.mode = Tier2::MODE_OFF;
+					TargetPixels::g_neonColumns16 = false;
 				}
 				else if(key == "iop_thread" || key == "iop_core" || key == "iop_priority" ||
 				        key == "vu1_vblank_sync" || key == "vu1_spin_us" || key == "ee_slice" ||
 				        key == "gs_frames_ahead" || key == "jit_cache" ||
+				        key == "block_coherency" || key == "group_block_readbacks" ||
+				        key == "tier2" || key == "tier2_hot" || key == "tier2_blocks" || key == "tier2_max" || key == "tier2_verify" ||
 				        key == "threaded_vu1" || key == "threaded_spu" || key == "spu_core" ||
 				        key == "ee_cycle_rate" || key == "frame_skip" || key == "software_renderer" ||
 				        key == "readback_finish" || key == "target_pixels_neon16" || key == "vu1_async" ||
@@ -1048,8 +1058,8 @@ namespace
 		}
 		if(diagnosticLogs || autostart)
 		{
-			sceIoRemove(VITAPS2_DATA_DIR "/perf-prev.csv");
-			sceIoRename(PERF_PATH, VITAPS2_DATA_DIR "/perf-prev.csv");
+			sceIoRemove(VITAPS2_DATA_DIR "/r4-perf-prev.csv");
+			sceIoRename(PERF_PATH, VITAPS2_DATA_DIR "/r4-perf-prev.csv");
 			perfFile = std::fopen(PERF_PATH, "w");
 			if(perfFile)
 			{
@@ -1062,10 +1072,11 @@ namespace
 				for(unsigned int i = 0; i < EmuProfile::SECTION_COUNT; i++) std::fprintf(perfFile, ",iopt_%s", EmuProfile::GetSectionName(i));
 				std::fprintf(perfFile, ",iop_inline_drains,iopt_busy_ms,iopt_sleep_ms,iopt_wake_latency_ms,iopt_wake_requests,iopt_wakes,iop_lag_ms,iop_lag_waits,iop_drain_ms,iop_drain_waits,iopt_spin_ms,tier2_regions,tier2_failed,tier2_instr,tier2_code_kb,tier2_ms,tier2_inlined,gpu_parts,game_fps,battery_pct,charging,battery_temp_c,arm_mhz,core3,gs_feed_ms,gs_feed_calls,gs_feed_kb,gs_regs_ms,gs_reg_calls,gs_reg_writes,gs_mail_calls,world_ms,targets_pooled,gs_send_ms,gs_send_calls,vif1_readback_ms,vif1_readbacks,vif1_readback_kb,gs_wait_ms,gs_wait_calls,world_hits,world_misses,world_cache_mb,gl_free_mb,gl_free_min_mb,gl_target_allocs,targets_live,targets_pool,world_runs,world_seg,world_slot_ms,reg_split,apply_calls,draw_calls,apply_split,prim_calls,gs_sections,gs_ready_sections,gs_blocked_sections,vu1_sections,gs_wb_peak,gs_wb_overflows,rb_neon,rb_gl,rb_neon_differ");
 				std::fprintf(perfFile, "\n");
+				std::fflush(perfFile);
 			}
 		}
 		const uint64_t runStart = sceKernelGetProcessTimeWide();
-		constexpr const char* GS_DIAG_PATH = VITAPS2_DATA_DIR "/gsdiag.txt";
+		constexpr const char* GS_DIAG_PATH = VITAPS2_DATA_DIR "/r4-gsdiag.txt";
 		int gsDiagFlips = (!autostart && diagnosticLogs && !settings.softwareRenderer) ? experimentGsFlips : 0;
 		uint32_t gsDiagAfterSeconds = experimentGsAfter;
 		if(autostart) gsDiagAfterSeconds = 0;
@@ -1191,6 +1202,24 @@ namespace
 			config.rasterizerThreads = 2;
 		}
 
+		// The 16-bit conversion is already implemented; test its output and speed
+		// before enabling it on the actual ARM device. No GS/VM threads yet.
+		if(!autostart && !settings.softwareRenderer)
+		{
+			const bool requested = TargetPixels::g_neonColumns16;
+			if(requested)
+			{
+				uint32 failures = TargetPixels::SelfTest(24);
+				bool layout = TargetPixels::GetBlockLayout(CGSHandler::PSMCT16).columns16 &&
+				              TargetPixels::GetBlockLayout(CGSHandler::PSMCT16S).columns16;
+				TargetPixels::g_neonColumns16 = failures == 0 && layout;
+				if(FILE* test = std::fopen(VITAPS2_DATA_DIR "/r4-gs16.txt", "w"))
+				{
+					std::fprintf(test, "build=%s failures=%u layout=%d enabled=%d\n", VITAPS2_BUILD, failures, layout, TargetPixels::g_neonColumns16);
+					std::fclose(test);
+				}
+			}
+		}
 		bool jitCacheOpened = false;
 		std::unique_ptr<CEmuSession> session;
 		try
@@ -1357,7 +1386,7 @@ namespace
 			session.reset();
 			if(perfFile) std::fclose(perfFile);
 			if(jitCacheOpened) JitCacheSetup::Close();
-			if(FILE* bootError = std::fopen(VITAPS2_DATA_DIR "/boot-error.txt", "w")) { std::fprintf(bootError, "%s: %s\n", VITAPS2_BUILD, e.what()); std::fclose(bootError); }
+			if(FILE* bootError = std::fopen(VITAPS2_DATA_DIR "/r4-boot-error.txt", "w")) { std::fprintf(bootError, "%s: %s\n", VITAPS2_BUILD, e.what()); std::fclose(bootError); }
 			std::printf("Boot error: %s\n", e.what());
 			ShowMessage("Failed to boot", e.what());
 			return;
@@ -1380,13 +1409,13 @@ namespace
 		FILE* sessionLog = nullptr;
 		if(diagnosticLogs || autostart)
 		{
-			hardwareLog = std::fopen(VITAPS2_DATA_DIR "/hardware.csv", "w");
-			threadsLog = std::fopen(VITAPS2_DATA_DIR "/threads.csv", "w");
+			hardwareLog = std::fopen(VITAPS2_DATA_DIR "/r4-hardware.csv", "w");
+			threadsLog = std::fopen(VITAPS2_DATA_DIR "/r4-threads.csv", "w");
 			// stdout/stderr redirection is unreliable on this Vita libc. Write
 			// the essential session records to an independent stream.
-			sceIoRemove(VITAPS2_DATA_DIR "/session-prev.txt");
-			sceIoRename(VITAPS2_DATA_DIR "/session.txt", VITAPS2_DATA_DIR "/session-prev.txt");
-			sessionLog = std::fopen(VITAPS2_DATA_DIR "/session.txt", "w");
+			sceIoRemove(VITAPS2_DATA_DIR "/r4-session-prev.txt");
+			sceIoRename(VITAPS2_DATA_DIR "/r4-session.txt", VITAPS2_DATA_DIR "/r4-session-prev.txt");
+			sessionLog = std::fopen(VITAPS2_DATA_DIR "/r4-session.txt", "w");
 			if(sessionLog)
 			{
 				std::fprintf(sessionLog, "build=%s\ngame=%s\nserial=%s\njit_open=%d\n%s\n",
@@ -1395,6 +1424,10 @@ namespace
 				             CVpu::g_asyncVif1, Ee::CSubSystem::g_vblankVu1Sync, CVpu::g_workerSpinUs,
 				             settings.iopThread, settings.iopCore, settings.spuCore, CTextureCache::g_lazyTexels,
 				             CGSH_Hardware::g_pumpKeepBatch, VitaCores::g_core3);
+				std::fprintf(sessionLog, "files perf=%d hardware=%d threads=%d gs16=%d grouped_readback=%d block_coherency=%d finish=%d tier2=%d\n",
+				             perfFile != nullptr, hardwareLog != nullptr, threadsLog != nullptr, TargetPixels::g_neonColumns16,
+				             CGSH_Hardware::g_groupBlockReadbacks, CGSH_Hardware::g_blockCoherency, CGSH_Hardware::g_readbackFinish,
+				             static_cast<int>(Tier2::g_settings.mode));
 				std::fflush(sessionLog);
 			}
 			if(hardwareLog) std::fprintf(hardwareLog, "t,cpu_mhz,bus_mhz,gpu_mhz,xbar_mhz,battery_pct,battery_temp_c,user_free_kb,cdram_free_kb,phycont_free_kb,memory_result,vm_fps,out_fps,ee_idle,core3,vu1_thread,iop_thread,spu_thread\n");
@@ -1404,6 +1437,8 @@ namespace
 		// Hang diagnostics: when the game stops presenting, sample where the
 		// EE runs and log the hottest addresses plus IOP/interrupt state.
 		uint64_t lastOutput = sceKernelGetProcessTimeWide();
+		uint64_t lastStallSample = 0;
+		uint64_t lastSessionGameFrames = CGSH_Hardware::g_gameFrames;
 		std::map<uint32_t, uint32_t> stallPcs;
 		std::string stallSummary;
 		std::string stallDetail; // code around the hot loop and EE registers
@@ -1580,7 +1615,13 @@ namespace
 			const uint64_t stalledFor = now - lastOutput;
 			if(stalledFor > 3000000)
 			{
-				if(stallPcs.size() < 256) stallPcs[session->GetDebugState().eePc]++;
+				// Do not query guest debug state on every UI pump while the JIT
+				// is working. 10 Hz is enough to distinguish a persistent wait.
+				if(now - lastStallSample >= 100000)
+				{
+					lastStallSample = now;
+					if(stallPcs.size() < 256) stallPcs[session->GetDebugState().eePc]++;
+				}
 			}
 			else if(!stallPcs.empty() || !stallSummary.empty())
 			{
@@ -1608,6 +1649,15 @@ namespace
 					             (unsigned long long)async.packets.load(), (unsigned long long)async.bytes.load(),
 					             (unsigned long long)async.stalls.load(), (unsigned long long)async.quietWaits.load(),
 					             (unsigned long long)async.quietWaitUs.load(), (unsigned long long)async.path3Syncs.load());
+					const uint64_t gameFrames = CGSH_Hardware::g_gameFrames;
+					std::fprintf(sessionLog, "sample game_fps=%.2f cpu_mhz=%d jit_kb=%u grouped_calls=%llu blocks=%llu",
+					             (gameFrames - lastSessionGameFrames) / static_cast<double>(seconds), scePowerGetArmClockFrequency(),
+					             static_cast<unsigned>(VitaJit_GetUsedBytes() / 1024),
+					             (unsigned long long)CGSH_Hardware::g_blockReadbackCalls, (unsigned long long)CGSH_Hardware::g_blockReadBacks);
+					lastSessionGameFrames = gameFrames;
+					for(const auto& usage : threadUsage)
+						std::fprintf(sessionLog, " %s:%.1f@%08X", usage.name.c_str(), usage.cpuPercent, static_cast<unsigned>(usage.affinityMask));
+					std::fprintf(sessionLog, "\n");
 					std::fflush(sessionLog);
 				}
 				if(hardwareLog)
@@ -2405,7 +2455,7 @@ int main()
 	// Compiled fixed-function shaders are cached so they are only built once.
 	sceIoMkdir(VITAPS2_DATA_DIR "/shaders", 0777);
 	vglSetShaderCachePath(VITAPS2_DATA_DIR "/shaders/");
-	CGSH_Hardware::g_glObjectDumpPath = VITAPS2_DATA_DIR "/globjects.txt";
+	CGSH_Hardware::g_glObjectDumpPath = VITAPS2_DATA_DIR "/r4-globjects.txt";
 	vglInitExtended(0x80000, SCREEN_WIDTH, SCREEN_HEIGHT, GL_RAM_LEFT_FREE, SCE_GXM_MULTISAMPLE_NONE);
 	vglWaitVblankStart(GL_TRUE);
 	if(!Gfx::Init())
