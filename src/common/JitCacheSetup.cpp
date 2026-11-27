@@ -76,14 +76,18 @@ namespace
 	uint64 Fingerprint(const std::string& executablePath)
 	{
 		XXH3_state_t* state = XXH3_createState();
+		if(!state) return 0;
 		XXH3_64bits_reset(state);
 		if(std::FILE* file = std::fopen(executablePath.c_str(), "rb"))
 		{
 			std::vector<uint8> buffer(256 * 1024);
 			size_t read = 0;
 			while((read = std::fread(buffer.data(), 1, buffer.size(), file)) != 0) XXH3_64bits_update(state, buffer.data(), read);
+			bool ok = !std::ferror(file);
 			std::fclose(file);
+			if(!ok) { XXH3_freeState(state); return 0; }
 		}
+		else { XXH3_freeState(state); return 0; }
 #if defined(__arm__) && !defined(__aarch64__)
 		// Modes that change the generated code without changing the executable.
 		uint8 modes[7] = {Jitter::CCodeGen_AArch32::GetConservativeAllocation(), Jitter::CCodeGen_AArch32::GetChainedFrames(),
@@ -103,7 +107,9 @@ bool JitCacheSetup::Open(const std::string& cachePath, const std::string& execut
 	if(!CJitCache::IsSupported()) return false;
 	auto ranges = GetImageRanges();
 	if(ranges.empty()) return false;
-	return CJitCache::GetInstance().Open(cachePath, Fingerprint(executablePath), ranges);
+	auto fingerprint = Fingerprint(executablePath);
+	if(!fingerprint) return false;
+	return CJitCache::GetInstance().Open(cachePath, fingerprint, ranges);
 }
 
 void JitCacheSetup::Close()

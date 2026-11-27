@@ -1,0 +1,51 @@
+diff --git a/Source/JitCache.cpp b/Source/JitCache.cpp
+--- a/Source/JitCache.cpp
++++ b/Source/JitCache.cpp
+@@ -102,5 +102,6 @@
+ 		std::fseek(m_file, static_cast<long>(m_fileSize), SEEK_SET);
+ 	}
++	m_committedSize = m_fileSize;
+ 	m_readFile = std::fopen(m_path.c_str(), "rb");
+ 	if(m_readFile)
+ 	{
+@@ -240,9 +241,10 @@
+ 	if(!m_file || !m_readFile) return false;
+ 	auto iterator = m_index.find(key);
+ 	if(iterator == m_index.end()) return false;
+-	if(m_unflushed != 0)
++	if(m_unflushed != 0 && (static_cast<size_t>(iterator->second.offset) + iterator->second.size > m_committedSize))
+ 	{
+-		std::fflush(m_file); //the record may have been stored in this session
++		if(std::fflush(m_file) != 0) return false;
++		m_committedSize = m_fileSize;
+ 		m_unflushed = 0;
+ 	}
+ 	m_record.resize(iterator->second.size);
+@@ -261,5 +263,7 @@
+ 	std::lock_guard<std::mutex> lock(m_mutex);
+ 	if(!m_file || (m_index.find(key) != m_index.end())) return;
+-	std::vector<uint8> record;
++	// The read and write buffers are used only while m_mutex is held.
++	auto& record = m_record;
++	record.clear();
+ 	Append(record, &key, sizeof(key));
+ 	Append32(record, entry.linkEntryOffset);
+@@ -293,7 +297,7 @@
+ 	m_stats.stored++;
+ 	if(++m_unflushed >= FLUSH_EVERY)
+ 	{
+-		std::fflush(m_file);
++		if(std::fflush(m_file) == 0) m_committedSize = m_fileSize;
+ 		m_unflushed = 0;
+ 	}
+ }
+diff --git a/Source/JitCache.h b/Source/JitCache.h
+--- a/Source/JitCache.h
++++ b/Source/JitCache.h
+@@ -146,5 +146,6 @@
+ 	size_t m_maxFileSize = 0;
+ 	size_t m_fileSize = 0;
++	size_t m_committedSize = 0;
+ 	std::unordered_map<KEY, LOCATION, KEY_HASH> m_index;
+ 	STATS m_stats;
+ 	uint32 m_unflushed = 0;

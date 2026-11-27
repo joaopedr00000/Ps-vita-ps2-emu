@@ -498,6 +498,20 @@ namespace
 	GAME_SETTINGS LoadSettings(const std::string& gamePath, const CGameProfiles::PROFILE* profile, bool& tuned, bool& playerFile)
 	{
 		GAME_SETTINGS settings;
+		// R3: experimental parallel pipeline, applied anew for every game.
+		// VIF register/memory and PATH3 ordering fences remain enabled.
+		CVpu::g_asyncVif1 = true;
+		CVpu::g_asyncPath3Sync = true;
+		CVpu::g_workerSpinUs = 100;
+		Ee::CSubSystem::g_vblankVu1Sync = false;
+		CGSH_Hardware::g_pumpKeepBatch = true;
+		CTextureCache::g_lazyTexels = true;
+		CGSH_Hardware::g_readbackFinish = false;
+		TargetPixels::g_neonColumns16 = false;
+		settings.iopThread = true;
+		settings.iopCore = 1;
+		settings.iopPriority = 170;
+		settings.spuCore = 3; // Mask() falls back to 2 when core 3 is unavailable.
 		if(profile)
 		{
 			for(const auto& [key, value] : *profile) ApplySetting(settings, key, value);
@@ -882,7 +896,20 @@ namespace
 				else if(key == "auto_tune") experimentAutoTune = value == "1";
 				else if(key == "gs_diag") experimentGsFlips = std::clamp(std::atoi(value.c_str()), 0, 300);
 				else if(key == "gs_diag_after") experimentGsAfter = static_cast<uint32_t>(std::clamp(std::atoi(value.c_str()), 0, 3600));
+				else if(key == "performance_mode" && value == "0")
+				{
+					// Explicit rollback of R3 performance defaults.
+					CVpu::g_asyncVif1 = false;
+					CVpu::g_workerSpinUs = 0;
+					Ee::CSubSystem::g_vblankVu1Sync = true;
+					CGSH_Hardware::g_pumpKeepBatch = false;
+					CTextureCache::g_lazyTexels = false;
+					settings.iopThread = false;
+					settings.spuCore = 2;
+				}
 				else if(key == "iop_thread" || key == "iop_core" || key == "iop_priority" ||
+				        key == "vu1_vblank_sync" || key == "vu1_spin_us" || key == "ee_slice" ||
+				        key == "gs_frames_ahead" || key == "jit_cache" ||
 				        key == "threaded_vu1" || key == "threaded_spu" || key == "spu_core" ||
 				        key == "ee_cycle_rate" || key == "frame_skip" || key == "software_renderer" ||
 				        key == "readback_finish" || key == "target_pixels_neon16" || key == "vu1_async" ||
@@ -1164,6 +1191,7 @@ namespace
 			config.rasterizerThreads = 2;
 		}
 
+		bool jitCacheOpened = false;
 		std::unique_ptr<CEmuSession> session;
 		try
 		{
@@ -1176,8 +1204,8 @@ namespace
 			{
 				auto slash = path.find_last_of('/');
 				std::string cachePath = std::string(JIT_CACHE_PATH) + "/" + path.substr(slash + 1) + ".jit";
-				bool opened = JitCacheSetup::Open(cachePath, "app0:eboot.bin");
-				std::printf("jit cache %s: %s\n", cachePath.c_str(), opened ? JitCacheSetup::Describe().c_str() : "not available");
+				jitCacheOpened = JitCacheSetup::Open(cachePath, "app0:eboot.bin");
+				std::printf("jit cache %s: %s\n", cachePath.c_str(), jitCacheOpened ? JitCacheSetup::Describe().c_str() : "not available");
 			}
 			session->Boot(path);
 			if(settings.eeSlice != 0) session->GetVm()->SetEeTickStep(static_cast<int>(settings.eeSlice));
@@ -1328,6 +1356,8 @@ namespace
 		{
 			session.reset();
 			if(perfFile) std::fclose(perfFile);
+			if(jitCacheOpened) JitCacheSetup::Close();
+			if(FILE* bootError = std::fopen(VITAPS2_DATA_DIR "/boot-error.txt", "w")) { std::fprintf(bootError, "%s: %s\n", VITAPS2_BUILD, e.what()); std::fclose(bootError); }
 			std::printf("Boot error: %s\n", e.what());
 			ShowMessage("Failed to boot", e.what());
 			return;
@@ -1347,10 +1377,26 @@ namespace
 		ThreadProfiler::Sample();
 		FILE* hardwareLog = nullptr;
 		FILE* threadsLog = nullptr;
+		FILE* sessionLog = nullptr;
 		if(diagnosticLogs || autostart)
 		{
 			hardwareLog = std::fopen(VITAPS2_DATA_DIR "/hardware.csv", "w");
 			threadsLog = std::fopen(VITAPS2_DATA_DIR "/threads.csv", "w");
+			// stdout/stderr redirection is unreliable on this Vita libc. Write
+			// the essential session records to an independent stream.
+			sceIoRemove(VITAPS2_DATA_DIR "/session-prev.txt");
+			sceIoRename(VITAPS2_DATA_DIR "/session.txt", VITAPS2_DATA_DIR "/session-prev.txt");
+			sessionLog = std::fopen(VITAPS2_DATA_DIR "/session.txt", "w");
+			if(sessionLog)
+			{
+				std::fprintf(sessionLog, "build=%s\ngame=%s\nserial=%s\njit_open=%d\n%s\n",
+				             VITAPS2_BUILD, path.c_str(), discSerial.c_str(), jitCacheOpened, JitCacheSetup::Describe().c_str());
+				std::fprintf(sessionLog, "async_vif1=%d vblank_sync=%d spin_us=%u iop_thread=%d iop_core=%u spu_core=%u lazy_textures=%d keep_batch=%d core3=%d\n",
+				             CVpu::g_asyncVif1, Ee::CSubSystem::g_vblankVu1Sync, CVpu::g_workerSpinUs,
+				             settings.iopThread, settings.iopCore, settings.spuCore, CTextureCache::g_lazyTexels,
+				             CGSH_Hardware::g_pumpKeepBatch, VitaCores::g_core3);
+				std::fflush(sessionLog);
+			}
 			if(hardwareLog) std::fprintf(hardwareLog, "t,cpu_mhz,bus_mhz,gpu_mhz,xbar_mhz,battery_pct,battery_temp_c,user_free_kb,cdram_free_kb,phycont_free_kb,memory_result,vm_fps,out_fps,ee_idle,core3,vu1_thread,iop_thread,spu_thread\n");
 			if(threadsLog) std::fprintf(threadsLog, "t,thread,tid,affinity_mask,status,cpu_percent_of_one_core\n");
 		}
@@ -1554,6 +1600,16 @@ namespace
 				statsTime = now;
 				threadUsage = ThreadProfiler::Sample();
 				const double diagTime = (now - runStart) / 1000000.0;
+				if(sessionLog)
+				{
+					const auto& async = CVpu::g_asyncStats;
+					std::fprintf(sessionLog, "t=%.1f vm=%.2f out=%.2f %s packets=%llu bytes=%llu stalls=%llu quiet_waits=%llu quiet_us=%llu path3_syncs=%llu\n",
+					             diagTime, vmFps, presentFps, JitCacheSetup::Describe().c_str(),
+					             (unsigned long long)async.packets.load(), (unsigned long long)async.bytes.load(),
+					             (unsigned long long)async.stalls.load(), (unsigned long long)async.quietWaits.load(),
+					             (unsigned long long)async.quietWaitUs.load(), (unsigned long long)async.path3Syncs.load());
+					std::fflush(sessionLog);
+				}
 				if(hardwareLog)
 				{
 					SceKernelFreeMemorySizeInfo memory = {};
@@ -2004,6 +2060,7 @@ namespace
 						length += std::snprintf(text + length, sizeof(text) - length, " %08X(%u)", hottest[i].first, hottest[i].second);
 					}
 					stallSummary = text;
+					if(sessionLog) { std::fprintf(sessionLog, "%s\n", text); std::fflush(sessionLog); }
 					std::printf("%s\n", text);
 					// Code of the loop the EE spins in (hot addresses near the
 					// hottest one) and the EE registers, to see what it waits for.
@@ -2236,6 +2293,7 @@ namespace
 		if(perfFile) std::fclose(perfFile);
 		if(hardwareLog) std::fclose(hardwareLog);
 		if(threadsLog) std::fclose(threadsLog);
+		if(sessionLog) std::fclose(sessionLog);
 	}
 
 	bool ReadAutostart(AUTOSTART& autostart)
