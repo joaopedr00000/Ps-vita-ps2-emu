@@ -887,6 +887,7 @@ namespace
 		bool diagnosticLogs = true;
 		bool detailedOverlay = false;
 		uint32_t hotspotStart = 60;
+		bool deepIoTrace = false;
 		size_t jitSoftLimit = 0;
 		bool experimentAutoTune = false;
 		int experimentGsFlips = 60;
@@ -903,6 +904,7 @@ namespace
 				else if(key == "auto_tune") experimentAutoTune = value == "1";
 				else if(key == "detailed_overlay") detailedOverlay = value == "1";
 				else if(key == "ee_hot_after") hotspotStart = static_cast<uint32_t>(std::clamp(std::atoi(value.c_str()), 0, 3600));
+				else if(key == "deep_io_trace") deepIoTrace = value == "1";
 				else if(key == "jit_limit_kb") jitSoftLimit = static_cast<size_t>(std::clamp(std::atoi(value.c_str()), 0, 48 * 1024)) * 1024;
 				else if(key == "gs_diag") experimentGsFlips = std::clamp(std::atoi(value.c_str()), 0, 300);
 				else if(key == "gs_diag_after") experimentGsAfter = static_cast<uint32_t>(std::clamp(std::atoi(value.c_str()), 0, 3600));
@@ -1795,9 +1797,9 @@ namespace
 						{
 							eeHotMovie = true;
 							session->ResetEeHotspots();
-							CPS2OS::g_syscallTiming = true; //kernel call time by number, in syscalls.txt
-							CIopBios::g_callCounting = true; //IOP HLE calls, in iopcalls.txt
-							Iop::CSpu2::g_countAccesses = true; //SPU2 register accesses, in iopcalls.txt
+							CPS2OS::g_syscallTiming = deepIoTrace || autostart; // optional per-call timing
+							CIopBios::g_callCounting = deepIoTrace || autostart; // optional per-call accounting
+							Iop::CSpu2::g_countAccesses = deepIoTrace || autostart; // optional register accounting
 						}
 						if(autostart && !eeHotMovie && (ipu.commands[2] != perfIpu.commands[2]))
 						{
@@ -1849,7 +1851,7 @@ namespace
 								}
 								std::fclose(calls);
 							}
-							if(FILE* calls = std::fopen(logPath("iopcalls.txt").c_str(), "w"))
+							if((deepIoTrace || autostart)) if(FILE* calls = std::fopen(logPath("iopcalls.txt").c_str(), "w"))
 							{
 								for(const auto& entry : CIopBios::g_callCounts) std::fprintf(calls, "%s %u\n", entry.first.c_str(), entry.second);
 								//Their parts: the IOPcounters, IOPbios and IOPdma profiler sections

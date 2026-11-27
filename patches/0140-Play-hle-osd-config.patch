@@ -7,7 +7,8 @@ diff --git a/Source/ee/PS2OS.cpp b/Source/ee/PS2OS.cpp
 +	m_state->osdConfig2Magic = 0;
  
  	//Specially selected next thread id to make sure main thread id is 1.
-@@ -2856,15 +2858,50 @@
+@@ -2855,17 +2857,52 @@
+ 
 -//4B
 -void CPS2OS::sc_GetOsdConfigParam()
 -{
@@ -73,12 +74,17 @@ diff --git a/Source/ee/PS2OS.cpp b/Source/ee/PS2OS.cpp
 +
 +void CPS2OS::sc_SetOsdConfigParam2() { sc_TransferOsdConfig2(true); }
 +void CPS2OS::sc_GetOsdConfigParam2() { sc_TransferOsdConfig2(false); }
-@@ -3617,1 +3654,1 @@
+ 
+@@ -3616,3 +3653,3 @@
+ 	//0x48
 -	&CPS2OS::sc_ReferSemaStatus,	&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,				&CPS2OS::sc_GetOsdConfigParam,		&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,
 +	&CPS2OS::sc_ReferSemaStatus,	&CPS2OS::sc_Unhandled,				&CPS2OS::sc_SetOsdConfigParam,				&CPS2OS::sc_GetOsdConfigParam,		&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,
-@@ -3625,1 +3662,1 @@
+ 	//0x50
+@@ -3624,3 +3661,3 @@
+ 	//0x68
 -	&CPS2OS::sc_FlushCache,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,
 +	&CPS2OS::sc_FlushCache,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,				&CPS2OS::sc_Unhandled,			&CPS2OS::sc_Unhandled,				&CPS2OS::sc_SetOsdConfigParam2,			&CPS2OS::sc_GetOsdConfigParam2,
+ 	//0x70
 diff --git a/Source/ee/PS2OS.h b/Source/ee/PS2OS.h
 --- a/Source/ee/PS2OS.h
 +++ b/Source/ee/PS2OS.h
