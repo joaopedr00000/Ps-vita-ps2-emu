@@ -13,6 +13,7 @@
 // (recompiling, stalls) and paused seconds are skipped.
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -85,7 +86,7 @@ public:
 			m_settle--;
 			return false;
 		}
-		if((stallShare <= STEADY_STALL) && (vmFps > 1.0f)) m_samples.push_back(vmFps);
+		if(std::isfinite(vmFps) && std::isfinite(targetFps) && std::isfinite(stallShare) && targetFps > 0.0f && stallShare >= 0.0f && stallShare <= STEADY_STALL && vmFps > 0.0f) m_samples.push_back(vmFps);
 		if(m_samples.size() < SAMPLES)
 		{
 			if(m_seconds > PHASE_TIMEOUT) return Finish(); //never steady: keep what we have
@@ -106,7 +107,8 @@ public:
 		case PHASE_BASE_B:
 		{
 			float gain = m_trial.frameSkip != m_base.frameSkip ? GAIN_FRAME_SKIP : GAIN_VU1;
-			bool better = m_trialFps >= std::max(m_baseA, median) * gain;
+			bool comparable = std::max(m_baseA, median) <= std::min(m_baseA, median) * 1.15f;
+			bool better = comparable && m_trialFps >= std::max(m_baseA, median) * gain;
 			if(better)
 			{
 				m_base = m_trial;

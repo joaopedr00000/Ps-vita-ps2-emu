@@ -437,6 +437,7 @@ namespace
 		else if(key == "strip_merge_opaque") CGSH_Hardware::g_stripMergeOpaque = value != 0; //opaque sprites continuing a strip cover merge too (exact; on)
 		else if(key == "gpu_upload") CGSH_Hardware::g_gpuUpload = value != 0; //target rows uploaded by drawing a scratch texture (exact; on)
 		else if(key == "target_pixels_neon") TargetPixels::g_neonColumns = value != 0; //32-bit target pixels moved by NEON per block column (exact; on)
+		else if(key == "target_pixels_neon16") TargetPixels::g_neonColumns16 = value != 0;
 		else if(key == "target_pixels_prefetch") TargetPixels::g_prefetchBlocks = static_cast<uint32_t>(value); //blocks ahead to prefetch (2)
 		else if(key == "texture_index") CTextureCache::g_indexedLookup = value != 0; //texture cache lookups by key hash (exact; on)
 		else if(key == "block_coherency") CGSH_Hardware::g_blockCoherency = value != 0; //per-block stale/clean target tracking (docs/BLOCK_COHERENCY.md; off)
@@ -886,7 +887,37 @@ namespace
 					std::fprintf(selfTest, "psmt4 blocks: %u of 2000 differ\n", GsTransferWrite::SelfTestPsmt4Blocks(2000));
 					GsTransferWrite::g_compare = savedCompare;
 				}
-				std::fprintf(selfTest, "target pixels: %u of 100 differ\n", TargetPixels::SelfTest(100));
+				const uint32 pixelFailures = TargetPixels::SelfTest(100);
+				std::fprintf(selfTest, "target pixels: %u of 100 differ\n", pixelFailures);
+				if(TargetPixels::g_neonColumns16)
+				{
+					if(pixelFailures || !TargetPixels::GetBlockLayout(CGSHandler::PSMCT16).columns16 ||
+					   !TargetPixels::GetBlockLayout(CGSHandler::PSMCT16S).columns16)
+					{
+						TargetPixels::g_neonColumns16 = false;
+						std::fprintf(selfTest, "target_pixels_neon16 disabled: differential/layout failure\n");
+					}
+					else
+					{
+						std::vector<uint8> ram(CGSHandler::RAMSIZE, 0xA5);
+						std::vector<uint32> pixels(512 * 448, 0xFF336699);
+						for(uint32 format : {uint32(CGSHandler::PSMCT16), uint32(CGSHandler::PSMCT16S)})
+						for(unsigned pass = 0; pass < 4; ++pass)
+						{
+							const bool enabled = pass == 1 || pass == 2;
+							TargetPixels::g_neonColumns16 = enabled;
+							TargetPixels::Read(ram.data(), format, 0, 8, 0, 0, 512, 448, pixels.data());
+							TargetPixels::Write(ram.data(), format, 0, 8, 0, 0, 512, 448, pixels.data());
+							const uint64 t0 = sceKernelGetProcessTimeWide();
+							for(unsigned n=0;n<16;++n) TargetPixels::Read(ram.data(),format,0,8,0,0,512,448,pixels.data());
+							const uint64 t1 = sceKernelGetProcessTimeWide();
+							for(unsigned n=0;n<16;++n) TargetPixels::Write(ram.data(),format,0,8,0,0,512,448,pixels.data());
+							const uint64 t2 = sceKernelGetProcessTimeWide();
+							std::fprintf(selfTest,"gs16 format=%u neon=%u read_us=%.2f write_us=%.2f\n",format,static_cast<unsigned>(enabled),(t1-t0)/16.0,(t2-t1)/16.0);
+						}
+						TargetPixels::g_neonColumns16 = true;
+					}
+				}
 				{
 					//Host to local transfer writes into a 4 MB GS memory: compare-and-store against store
 					//only (feed_compare), and a plain memcpy of the same bytes, in ns per byte

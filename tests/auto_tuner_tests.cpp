@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include "AutoTuner.h"
 
 namespace
@@ -116,6 +117,15 @@ int main()
 			return SAMPLE{(c.threadedVu1 ? 30.0f : 24.0f) + Noise(t), 0.05f};
 		});
 		Check(choice.threadedVu1, "loading seconds don't count in measurements");
+	}
+	{
+		CAutoTuner::CHOICE start; start.threadedVu1 = false;
+		auto choice = Run([](const CAutoTuner::CHOICE& c,unsigned int){return SAMPLE{c.threadedVu1?0.8f:0.4f,0.05f};},nullptr,start);
+		Check(choice.threadedVu1,"sub-1fps measurements accepted");
+	}
+	{
+		auto choice = Run([](const CAutoTuner::CHOICE&,unsigned int){return SAMPLE{std::numeric_limits<float>::infinity(),0.05f};});
+		Check(choice.threadedVu1 && choice.frameSkip==0,"invalid samples ignored");
 	}
 	// The player changing settings stops tuning.
 	{
