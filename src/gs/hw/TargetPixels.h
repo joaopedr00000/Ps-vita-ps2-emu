@@ -13,6 +13,7 @@
 #include <vector>
 #include "GsMemory.h"
 #include "GsSurface.h"
+#include "TargetPixels16.h"
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #include <arm_neon.h>
 #endif
@@ -112,6 +113,7 @@ namespace TargetPixels
 		//of 4 holds pixels 2g, 2g+1 of the column's first row, then the same of its second row):
 		//the NEON block move below applies
 		bool columns32 = false;
+		bool columns16 = false;
 	};
 
 	inline BLOCK_LAYOUT BuildBlockLayout(uint32 psm)
@@ -165,12 +167,14 @@ namespace TargetPixels
 				if(layout.place[unit] != (x | (y << 8))) layout.columns32 = false;
 			}
 		}
+		layout.columns16 = is16 && TargetPixels16::Matches(layout.place);
 		layout.valid = true;
 		return layout;
 	}
 
 	//target_pixels_neon (on): 32-bit blocks moved by NEON registers (columns32 layouts only)
 	inline bool g_neonColumns = true;
+	inline bool g_neonColumns16 = false;
 	inline uint32 g_prefetchBlocks = 2; //target_pixels_prefetch: blocks ahead to prefetch (0: none)
 
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
@@ -316,7 +320,11 @@ namespace TargetPixels
 		// Where each unit of a block goes in 'pixels', from the block's top left pixel
 		uint32 units = 256 / layout.unitBytes;
 		uint32 index[128];
-		for(uint32 u = 0; u < units; u++) index[u] = (layout.place[u] >> 8) * stride + (layout.place[u] & 0xFF);
+		bool scalarIndices = true;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+		scalarIndices = !((g_neonColumns && layout.columns32 && layout.unitBytes == 4) || (g_neonColumns16 && layout.columns16 && layout.unitBytes == 2));
+#endif
+		if(scalarIndices) for(uint32 u = 0; u < units; u++) index[u] = (layout.place[u] >> 8) * stride + (layout.place[u] & 0xFF);
 		GS_SURFACE surface;
 		surface.Init(psm, fbp, fbw);
 		bool is16 = layout.unitBytes == 2;
@@ -331,6 +339,12 @@ namespace TargetPixels
 				uint8* block = ram + (surface.Offset(rowBase, rowTable, bx) & ~255u);
 				uint32* p = pixels + (by - y0) * stride + (bx - x0);
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
+				if(g_neonColumns16 && layout.columns16 && is16)
+				{
+					if(write) TargetPixels16::Write(p, stride, reinterpret_cast<uint16*>(block));
+					else TargetPixels16::Read(reinterpret_cast<const uint16*>(block), p, stride);
+					continue;
+				}
 				if(g_neonColumns && layout.columns32 && !is16)
 				{
 					if(g_prefetchBlocks != 0)
@@ -452,10 +466,10 @@ namespace TargetPixels
 			for(auto& v : pixels) v = next() ^ (next() << 24);
 			Write(ram.data(), psm, fbp, fbw, x0, y0, width, height, pixels.data());
 			WritePixels(ramB.data(), psm, fbp, fbw, x0, y0, width, height, pixels.data(), width);
-			if((a != b) || (std::memcmp(ram.data(), ramB.data(), used) != 0))
+			if((a != b) || (std::memcmp(ram.data(), ramB.data(), ram.size()) != 0))
 			{
 				failures++;
-				std::memcpy(ramB.data(), ram.data(), used);
+				std::memcpy(ramB.data(), ram.data(), ram.size());
 			}
 		}
 		return failures;

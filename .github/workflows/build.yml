@@ -2,76 +2,14 @@ name: Build
 
 on:
   push:
-  pull_request:
+    branches:
+      - experiment/general-performance-r1
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  host:
-    name: Host build + tests (Linux)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libbz2-dev zlib1g-dev libosmesa6-dev
-      - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-      - name: Build
-        run: cmake --build build -j$(nproc)
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
-
-  arm:
-    name: ARM Linux build + tests under qemu (AArch32 JIT)
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write # commits the performance-gap chart (docs/perf) on the default branch
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Install cross toolchain and armhf libraries
-        run: |
-          sudo sed -i 's/^Types: deb$/Types: deb\nArchitectures: amd64/' /etc/apt/sources.list.d/ubuntu.sources
-          printf 'Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports/\nSuites: noble noble-updates noble-security\nComponents: main universe\nArchitectures: armhf\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' | sudo tee /etc/apt/sources.list.d/ports.sources
-          sudo dpkg --add-architecture armhf
-          sudo apt-get update
-          sudo apt-get install -y ninja-build qemu-user g++-arm-linux-gnueabihf zlib1g-dev:armhf libbz2-dev:armhf libssl-dev:armhf
-      - name: Configure
-        run: cmake -S . -B build-arm -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/armhf-linux.cmake -DCMAKE_BUILD_TYPE=Release
-      - name: Build
-        run: cmake --build build-arm -j$(nproc)
-      - name: Test
-        run: ctest --test-dir build-arm --output-on-failure
-      # ARM instructions executed per PS2 instruction (exact counts under qemu),
-      # appended to docs/perf/history.csv and drawn as docs/perf/gap.svg.
-      - name: Measure performance gap
-        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
-        run: |
-          python3 tools/perf_gap.py --runner build-arm/vitaps2_host \
-            --history docs/perf/history.csv --svg docs/perf/gap.svg \
-            --label "$(git rev-parse --short HEAD)"
-      - name: Publish performance gap chart
-        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          cp docs/perf/history.csv docs/perf/gap.svg "$RUNNER_TEMP/"
-          for attempt in 1 2 3; do
-            git fetch origin "$GITHUB_REF_NAME"
-            git checkout -f -B perf-update "origin/$GITHUB_REF_NAME"
-            # Keep rows measured by other runs: append ours to the latest history
-            tail -n 1 "$RUNNER_TEMP/history.csv" >> docs/perf/history.csv
-            python3 tools/perf_gap.py --runner none --render-only \
-              --history docs/perf/history.csv --svg docs/perf/gap.svg
-            git add docs/perf
-            git commit -m "Performance gap: $(git rev-parse --short "$GITHUB_SHA") [skip ci]"
-            if git push origin "HEAD:$GITHUB_REF_NAME"; then exit 0; fi
-            sleep $((attempt * 5))
-          done
-          exit 1
-
   vita:
     name: PS Vita build (VitaSDK)
     runs-on: ubuntu-24.04

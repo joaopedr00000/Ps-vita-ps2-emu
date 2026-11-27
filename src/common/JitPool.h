@@ -8,8 +8,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <mutex>
+#include <utility>
 
 class CJitPool
 {
@@ -30,6 +32,7 @@ public:
 	void* Alloc(size_t size)
 	{
 		if(size == 0) size = 1;
+		if(size > std::numeric_limits<size_t>::max() - (ALIGNMENT - 1)) return nullptr;
 		size = (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
 		std::lock_guard<std::mutex> lock(m_mutex);
 		for(auto it = m_free.begin(); it != m_free.end(); ++it)
@@ -37,9 +40,18 @@ public:
 			if(it->second < size) continue;
 			uintptr_t address = it->first;
 			size_t remaining = it->second - size;
-			m_free.erase(it);
-			if(remaining != 0) m_free[address + size] = remaining;
-			m_used[address] = size;
+			if(remaining != 0)
+			{
+				m_used.emplace(address, size);
+				auto node = m_free.extract(it);
+				node.key() = address + size;
+				node.mapped() = remaining;
+				m_free.insert(std::move(node));
+			}
+			else
+			{
+				m_used.insert(m_free.extract(it));
+			}
 			m_usedBytes += size;
 			return reinterpret_cast<void*>(address);
 		}
@@ -54,7 +66,7 @@ public:
 		if(used == m_used.end()) return;
 		uintptr_t address = used->first;
 		size_t size = used->second;
-		m_used.erase(used);
+		auto node = m_used.extract(used);
 		m_usedBytes -= size;
 
 		auto next = m_free.lower_bound(address);
@@ -72,7 +84,8 @@ public:
 				return;
 			}
 		}
-		m_free[address] = size;
+		node.mapped() = size;
+		m_free.insert(std::move(node));
 	}
 
 	size_t GetUsedBytes()

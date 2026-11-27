@@ -10,6 +10,7 @@
 int main()
 {
 	GS_SURFACE::InitTables();
+	TargetPixels::g_neonColumns16 = true;
 	std::mt19937 rng(4321);
 	const uint32 psms[] = {CGSHandler::PSMCT32, CGSHandler::PSMCT24, CGSHandler::PSMCT16, CGSHandler::PSMCT16S};
 	const char* names[] = {"PSMCT32", "PSMCT24", "PSMCT16", "PSMCT16S"};

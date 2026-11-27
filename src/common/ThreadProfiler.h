@@ -19,6 +19,9 @@ namespace ThreadProfiler
 	{
 		std::string name;
 		float cpuPercent = 0;
+		int threadId = -1;
+		int affinityMask = -1;
+		int status = -1;
 	};
 	std::vector<SAMPLE> Sample();
 }

@@ -79,6 +79,15 @@ namespace
 int main()
 {
 	bool ok = true;
+	{
+		CAudioStretcher s; s.Push(nullptr,0); s.Pull(nullptr,0);
+		std::vector<int16_t> input(48000*2,1234), output(1024*2);
+		for(int i=0;i<30;++i) s.Push(input.data(),48000);
+		ok &= s.GetStats().bufferedFrames <= 44100;
+		for(int i=0;i<200;++i){s.Pull(output.data(),1024);ok &= s.GetStats().bufferedFrames <= 44100;}
+		s.Reset();s.Pull(output.data(),1024);for(auto value:output)ok &= value==0;
+		std::printf("audio backlog/reset: %s\n",ok?"ok":"FAIL");
+	}
 	for(double speed : {1.0, 0.75, 0.5, 0.25})
 	{
 		auto r = Run(speed, 12.0, 440.0);

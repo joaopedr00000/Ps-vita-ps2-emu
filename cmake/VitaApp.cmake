@@ -3,8 +3,8 @@
 include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "VitaPS2")      # VPK file name (scripts and CI artifacts)
-set(VITA_APP_TITLE "VitaStation2") # name on the home screen and LiveArea
-set(VITA_TITLEID  "VTPS20000")
+set(VITA_APP_TITLE "VitaStation2 Experimental R4") # name on the home screen and LiveArea
+set(VITA_TITLEID  "VTPS2E001")
 # A second install next to the main one (another session testing on the same Vita):
 # -DVITAPS2_TITLEID=VTPS20001 -DVITAPS2_DATA_DIR=ux0:data/VitaPS2gp "-DVITAPS2_TITLE=VitaStation2 GP"
 if(VITAPS2_TITLEID)
@@ -14,9 +14,9 @@ if(VITAPS2_TITLE)
 	set(VITA_APP_TITLE "${VITAPS2_TITLE}")
 endif()
 if(NOT VITAPS2_DATA_DIR)
-	set(VITAPS2_DATA_DIR "ux0:data/VitaPS2")
+	set(VITAPS2_DATA_DIR "ux0:data/VitaPS2exp")
 endif()
-set(VITA_VERSION  "00.10")
+set(VITA_VERSION  "00.12")
 
 # ATTRIBUTE2=12 unlocks the extended memory budget the emulator needs.
 set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")

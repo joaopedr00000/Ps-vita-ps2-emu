@@ -3,6 +3,7 @@
 #include <random>
 #include <vector>
 #include "JitPool.h"
+#include <limits>
 
 static int g_failures = 0;
 #define CHECK(cond)                                                       \
@@ -37,6 +38,7 @@ int main()
 	CHECK(pool.GetFreeRangeCount() == 1); //fully coalesced
 
 	CHECK(pool.Alloc(sizeof(backing) + 1) == nullptr);
+	CHECK(pool.Alloc(std::numeric_limits<size_t>::max()) == nullptr);
 	void* all = pool.Alloc(sizeof(backing));
 	CHECK(all == backing);
 	CHECK(pool.Alloc(16) == nullptr);

@@ -1,5 +1,6 @@
 #include "GSH_Hardware.h"
 #include "TargetPixels.h"
+#include "ReadbackRuns.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -1242,22 +1243,32 @@ void CGSH_Hardware::ReadBackBlocks(TARGET& target, const std::vector<uint32>& bl
 	uint32 bw = layout.width, bh = layout.height, blocksW = target.width / bw;
 	glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
 	SyncForReadback();
-	for(uint32 index : blocks)
+	GS_SURFACE surface;
+	surface.Init(target.psm, target.fbp, target.fbw);
+	if(blocksW == 0) return;
+	for(size_t pos = 0; pos < blocks.size();)
 	{
-		uint32 x = (index % blocksW) * bw, y = (index / blocksW) * bh;
+		const uint32 index = blocks[pos];
+		const uint32 count = ReadbackRuns::Count(blocks.data(), blocks.size(), pos, blocksW, g_groupBlockReadbacks ? 16u : 1u);
+		pos += count;
+		const uint32 x = (index % blocksW) * bw, y = (index / blocksW) * bh;
 		if(y + bh > target.height) continue;
-		m_transferPixels.resize(bw * bh);
-		glReadPixels(x, y, bw, bh, GL_RGBA, GL_UNSIGNED_BYTE, m_transferPixels.data());
-		TargetPixels::Write(m_pRAM, target.psm, target.fbp, target.fbw, x, y, bw, bh, m_transferPixels.data());
+		const uint32 width = count * bw;
+		m_transferPixels.resize(width * bh);
+		const uint64 glStart = NowUs();
+		glReadPixels(x, y, width, bh, GL_RGBA, GL_UNSIGNED_BYTE, m_transferPixels.data());
+		GetTimes().downloadGlUs += NowUs() - glStart;
+		GetTimes().partUs[GPU_PART_DOWNLOAD_PIXELS] += NowUs() - glStart;
 		{
-			//Textures decoded from these bytes are out of date
-			GS_SURFACE surface;
-			surface.Init(target.psm, target.fbp, target.fbw);
-			MarkMemoryWritten(surface.Offset(x, y) & ~255u, 256);
+			CPartTimer swizzleTimer(GPU_PART_DOWNLOAD_SWIZZLE);
+			TargetPixels::Write(m_pRAM, target.psm, target.fbp, target.fbw, x, y, width, bh, m_transferPixels.data());
+			for(uint32 n = 0; n < count; ++n)
+				MarkMemoryWritten(surface.Offset(x + n * bw, y) & ~255u, 256);
 		}
-		GetTimes().downloadPixels += bw * bh;
-		g_roundTripPixels[0][std::min<uint32>(m_roundTripCause, 15)] += bw * bh;
-		g_blockReadBacks++;
+		GetTimes().downloadPixels += width * bh;
+		g_roundTripPixels[0][std::min<uint32>(m_roundTripCause, 15)] += width * bh;
+		g_blockReadBacks += count;
+		g_blockReadbackCalls++;
 	}
 	m_depthSceneValid = false;
 	m_stateApplied = false;

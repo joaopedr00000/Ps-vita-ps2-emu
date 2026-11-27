@@ -26,6 +26,7 @@ void CAudioStretcher::Reset()
 	m_output.clear();
 	m_outputRead = 0;
 	m_hasTail = false;
+	m_lastSample[0] = m_lastSample[1] = 0;
 	m_pushedSinceLastPull = 0;
 	m_inputRate = 1.0f;
 	m_tempo = 1.0f;
@@ -33,6 +34,7 @@ void CAudioStretcher::Reset()
 
 void CAudioStretcher::Push(const int16_t* samples, size_t frames)
 {
+	if(frames == 0) return;
 	std::lock_guard<std::mutex> lock(m_mutex);
 	m_input.insert(m_input.end(), samples, samples + frames * 2);
 	m_pushedSinceLastPull += frames;
@@ -43,6 +45,7 @@ void CAudioStretcher::Push(const int16_t* samples, size_t frames)
 	{
 		m_inputPosition += static_cast<double>(buffered - MAX_BUFFERED_FRAMES / 2);
 		m_hasTail = false;
+		CompactInput();
 	}
 }
 
@@ -74,16 +77,19 @@ size_t CAudioStretcher::FindBestOffset(const int16_t* candidates) const
 
 	size_t best = 0;
 	float bestScore = -1e30f;
+	// Exact sliding window sum of squared mono integer samples.
+	double energy = 1.0;
+	for(size_t i=0;i<OVERLAP/2;++i) energy += static_cast<double>(mono[i])*mono[i];
 	for(size_t k = 0; k < SEEK / 2; k++)
 	{
-		float corr = 0, energy = 1.0f;
+		if(k) {const double old=mono[k-1], next=mono[k+OVERLAP/2-1]; energy += next*next-old*old;}
+		float corr = 0;
 		for(size_t i = 0; i < OVERLAP / 2; i++)
 		{
 			float c = mono[k + i];
 			corr += tail[i] * c;
-			energy += c * c;
 		}
-		float score = corr / std::sqrt(energy);
+		float score = corr / std::sqrt(static_cast<float>(energy));
 		if(score > bestScore)
 		{
 			bestScore = score;
@@ -128,14 +134,14 @@ bool CAudioStretcher::ProcessSegment()
 	std::memcpy(m_tail.data(), segment + (SEQUENCE - OVERLAP) * 2, OVERLAP * 2 * sizeof(int16_t));
 	m_hasTail = true;
 
-	m_inputPosition += static_cast<double>(SEQUENCE - OVERLAP) * m_tempo;
+	m_inputPosition = std::min(static_cast<double>(totalFrames), m_inputPosition + static_cast<double>(SEQUENCE - OVERLAP) * m_tempo);
 	CompactInput();
 	return true;
 }
 
 void CAudioStretcher::CompactInput()
 {
-	size_t consumed = static_cast<size_t>(m_inputPosition);
+	size_t consumed = std::min(static_cast<size_t>(m_inputPosition), m_input.size() / 2);
 	if(consumed < 16384) return;
 	m_input.erase(m_input.begin(), m_input.begin() + consumed * 2);
 	m_inputPosition -= static_cast<double>(consumed);
@@ -143,6 +149,7 @@ void CAudioStretcher::CompactInput()
 
 void CAudioStretcher::Pull(int16_t* samples, size_t frames)
 {
+	if(frames == 0) return;
 	std::lock_guard<std::mutex> lock(m_mutex);
 	UpdateTempo(frames);
 
@@ -152,7 +159,7 @@ void CAudioStretcher::Pull(int16_t* samples, size_t frames)
 	}
 
 	size_t available = std::min(m_output.size() / 2 - m_outputRead, frames);
-	std::memcpy(samples, m_output.data() + m_outputRead * 2, available * 2 * sizeof(int16_t));
+	if(available != 0) std::memcpy(samples, m_output.data() + m_outputRead * 2, available * 2 * sizeof(int16_t));
 	m_outputRead += available;
 	if(available != 0)
 	{
