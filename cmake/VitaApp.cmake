@@ -3,7 +3,7 @@
 include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "VitaPS2")      # VPK file name (scripts and CI artifacts)
-set(VITA_APP_TITLE "VitaStation2 Experimental R6") # name on the home screen and LiveArea
+set(VITA_APP_TITLE "VitaStation2 Experimental R7") # name on the home screen and LiveArea
 set(VITA_TITLEID  "VTPS2E001")
 # A second install next to the main one (another session testing on the same Vita):
 # -DVITAPS2_TITLEID=VTPS20001 -DVITAPS2_DATA_DIR=ux0:data/VitaPS2gp "-DVITAPS2_TITLE=VitaStation2 GP"
@@ -16,7 +16,7 @@ endif()
 if(NOT VITAPS2_DATA_DIR)
 	set(VITAPS2_DATA_DIR "ux0:data/VitaPS2exp")
 endif()
-set(VITA_VERSION  "00.14")
+set(VITA_VERSION  "00.15")
 
 # ATTRIBUTE2=12 unlocks the extended memory budget the emulator needs.
 set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
@@ -54,7 +54,23 @@ if(NOT VITAPS2_COMMIT)
 endif()
 target_compile_definitions(vitaps2 PRIVATE VITAPS2_BUILD="${VITA_VERSION}-${VITAPS2_COMMIT}")
 
+# Generate the optional kubridge 0.3.1 ABI's weak import library with VitaSDK.
+find_program(VITA_LIBS_GEN vita-libs-gen REQUIRED)
+find_program(VITA_STUB_MAKE make REQUIRED)
+set(KUBRIDGE_STUB_DIR "${CMAKE_CURRENT_BINARY_DIR}/kubridge-import")
+file(MAKE_DIRECTORY "${KUBRIDGE_STUB_DIR}")
+execute_process(COMMAND "${VITA_LIBS_GEN}" "${CMAKE_CURRENT_SOURCE_DIR}/src/vita/kubridge_imports.yml" "${KUBRIDGE_STUB_DIR}"
+                RESULT_VARIABLE KUBRIDGE_GEN_RESULT)
+if(NOT KUBRIDGE_GEN_RESULT EQUAL 0)
+	message(FATAL_ERROR "kubridge weak import generation failed")
+endif()
+execute_process(COMMAND "${VITA_STUB_MAKE}" -C "${KUBRIDGE_STUB_DIR}" RESULT_VARIABLE KUBRIDGE_MAKE_RESULT)
+if(NOT KUBRIDGE_MAKE_RESULT EQUAL 0)
+	message(FATAL_ERROR "kubridge weak import build failed")
+endif()
+
 target_link_libraries(vitaps2
+	"${KUBRIDGE_STUB_DIR}/libkubridge_stub_weak.a"
 	vitaps2_common
 	vitaps2_ui
 	gsh_hardware

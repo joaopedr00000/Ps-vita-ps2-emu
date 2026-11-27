@@ -8,7 +8,7 @@
 // called once, early (before the VM is created). Tries sizes from maxSize
 // down to minSize (1MB granularity). Returns false if nothing could be
 // allocated; VitaJit_GetDiagnostics() then explains why.
-bool VitaJit_Init(size_t minSize, size_t maxSize);
+bool VitaJit_Init(size_t minSize, size_t maxSize, bool allowExpansion = true);
 // Treat the pool as this small when deciding to drop EE code (scripted tests of
 // the flush path; 0 = the whole pool).
 void VitaJit_SetSoftLimit(size_t bytes);

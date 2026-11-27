@@ -63,6 +63,7 @@
 #include "EmuProfile.h"
 #include "iop/Iop_SubSystem.h"
 #include "MpegHle.h"
+#include "ee/Ee_IdleEvaluator.h"
 #include "ParallelIop.h"
 #include "MpegShadow.h"
 #include "Ps2Const.h"
@@ -205,7 +206,7 @@ namespace
 	constexpr const char* BUILTIN_TEST = "app0:gs_test.elf";
 	constexpr const char* BUILTIN_TEST_NAME = "[Built-in] GS self test";
 	constexpr size_t JIT_POOL_MIN = 8 * 1024 * 1024;
-	constexpr size_t JIT_POOL_MAX = 16 * 1024 * 1024;
+	constexpr size_t JIT_POOL_MAX = 32 * 1024 * 1024;
 	// System RAM kept out of vitaGL's pools (thread stacks, audio, the shader
 	// compiler's own allocations).
 	constexpr int GL_RAM_LEFT_FREE = 24 * 1024 * 1024;
@@ -367,12 +368,13 @@ namespace
 		else if(key == "tier2_verify")
 		{
 			Tier2::g_settings.verify = value != 0;
-			Tier2::g_settings.verifyPath = VITAPS2_DATA_DIR "/r6-tier2verify.txt";
+			Tier2::g_settings.verifyPath = VITAPS2_DATA_DIR "/r7-tier2verify.txt";
 		}
 		else if(key == "tier2_exits") Tier2::g_settings.exits = static_cast<uint32>(value);
 		else if(key == "tier2_depth") Tier2::g_settings.maxCallDepth = std::max(0, static_cast<int>(value));
 		else if(key == "iop_spin_us") CPS2VM::g_iopSpinUs = std::max(0, static_cast<int>(value));
 		else if(key == "ee_stay_in_slice") settings.eeStayInSlice = value != 0;
+		else if(key == "sema_idle") Ee::CIdleEvaluator::g_semaIdleEnabled = value != 0;
 		else if(key == "threaded_spu") settings.threadedSpu = value != 0;
 		else if(key == "jit_cache") settings.jitCache = value != 0;
 		else if(key == "mpeg_hle") settings.movieHle = value != 0;
@@ -499,7 +501,8 @@ namespace
 	GAME_SETTINGS LoadSettings(const std::string& gamePath, const CGameProfiles::PROFILE* profile, bool& tuned, bool& playerFile)
 	{
 		GAME_SETTINGS settings;
-		// R5: conservative synchronization; isolate the SPU2 mixer from VU1 when possible.
+		Ee::CIdleEvaluator::g_semaIdleEnabled = true;
+		// R7: conservative synchronization; isolate the SPU2 mixer from VU1 when possible.
 		// VIF register/memory and PATH3 ordering fences remain enabled.
 		CVpu::g_asyncVif1 = false;
 		CVpu::g_asyncPath3Sync = true;
@@ -928,6 +931,7 @@ namespace
 				        key == "gs_frames_ahead" || key == "jit_cache" ||
 				        key == "jit_regions" || key == "cheap_exits" || key == "pinned_fields" || key == "fast_ram" || key == "indirect_jit" ||
 				        key == "safe_jit" || key == "mpeg_hle" || key == "spu_fast_reads" ||
+				        key == "ee_stay_in_slice" || key == "iop_stay_in_slice" || key == "mpeg_core" || key == "mpeg_copy_core" || key == "sema_idle" ||
 				        key == "bulk_unpack" || key == "bulk_unpack_neon" || key == "vu_loop_variant" || key == "vu_stall_check" ||
 				        key == "vu_vector_opmul" || key == "vu_flag_tracking" || key == "readback_neon" || key == "readback_neon_check" ||
 				        key == "block_coherency" || key == "group_block_readbacks" ||
@@ -951,12 +955,12 @@ namespace
 		const auto sessionId = std::to_string(static_cast<unsigned long long>(std::time(nullptr))) + "-" +
 		                       std::to_string(static_cast<unsigned long long>(sceKernelGetProcessTimeWide()));
 		const bool internalTest = path == "app0:gs_test.elf";
-		const std::string logRoot = std::string(DATA_PATH) + "/r6-logs";
+		const std::string logRoot = std::string(DATA_PATH) + "/r7-logs";
 		sceIoMkdir(logRoot.c_str(), 0777);
 		const std::string logDir = logRoot + "/" + (internalTest ? "gs-test-" : "game-") + sessionId;
 		sceIoMkdir(logDir.c_str(), 0777);
 		const auto logPath = [&](const char* file) { return logDir + "/" + file; };
-		const std::string latestPath = std::string(DATA_PATH) + (internalTest ? "/r6-latest-test.txt" : "/r6-latest-game.txt");
+		const std::string latestPath = std::string(DATA_PATH) + (internalTest ? "/r7-latest-test.txt" : "/r7-latest-game.txt");
 		if(FILE* marker = std::fopen(latestPath.c_str(), "w"))
 		{
 			std::fprintf(marker, "build=%s\nsession_id=%s\ngame=%s\nlogs=%s\n", VITAPS2_BUILD, sessionId.c_str(), path.c_str(), logDir.c_str());
@@ -1266,7 +1270,7 @@ namespace
 				std::string name = path.substr(slash == std::string::npos ? 0 : slash + 1);
 				for(char& ch : name)
 					if(ch == ':' || ch == '/' || ch == '\\' || ch == '*' || ch == '?' || ch == '"' || ch == '<' || ch == '>' || ch == '|') ch = '_';
-				std::string cachePath = std::string(JIT_CACHE_PATH) + "/" + name + ".r6";
+				std::string cachePath = std::string(JIT_CACHE_PATH) + "/" + name + ".r7";
 				// Code-affecting VU options must not share a native cache.
 				const std::string vuMode = std::to_string(CVuBasicBlock::g_extraCompileHints) + ":" +
 				                           std::to_string(CVuBasicBlock::g_loopVariant) + ":" +
@@ -1291,7 +1295,7 @@ namespace
 				// Native movie decoding (libmpeg 2.2 sceMpegGetPicture), decoder on
 				// core 2 (VU1 has little to do while the EE does not decode).
 				uint32_t mpegCoreMask = VitaCores::Mask(settings.mpegCore);
-				mpegHle.Enable(session->GetVm()->m_ee->m_ram, VITAPS2_DATA_DIR "/mpeghle.txt", [mpegCoreMask]() {
+				mpegHle.Enable(session->GetVm()->m_ee->m_ram, logPath("mpeghle.txt").c_str(), [mpegCoreMask]() {
 					sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), mpegCoreMask);
 					ThreadProfiler::RegisterCurrentThread("MPEG decoder");
 				}, [copyCoreMask = VitaCores::Mask(settings.mpegCopyCore), copyPriority = static_cast<int>(settings.mpegCopyPriority)]() {
@@ -1470,6 +1474,7 @@ namespace
 				             CVpu::g_asyncVif1, Ee::CSubSystem::g_vblankVu1Sync, CVpu::g_workerSpinUs,
 				             settings.iopThread, settings.iopCore, settings.spuCore, CTextureCache::g_lazyTexels,
 				             CGSH_Hardware::g_pumpKeepBatch, VitaCores::g_core3);
+				std::fprintf(sessionLog, "sema_idle=%d ee_stay_in_slice=%d iop_stay_in_slice=%d mpeg_hle=%d\n", Ee::CIdleEvaluator::g_semaIdleEnabled, settings.eeStayInSlice, settings.iopStayInSlice, settings.movieHle);
 				std::fprintf(sessionLog, "files perf=%d hardware=%d threads=%d gs16=%d grouped_readback=%d block_coherency=%d finish=%d tier2=%d\n",
 				             perfFile != nullptr, hardwareLog != nullptr, threadsLog != nullptr, TargetPixels::g_neonColumns16,
 				             CGSH_Hardware::g_groupBlockReadbacks, CGSH_Hardware::g_blockCoherency, CGSH_Hardware::g_readbackFinish,
@@ -2309,7 +2314,7 @@ namespace
 					           d.fromMemory, d.skipped, d.disabled, d.bufPtr, d.bufWidth, d.psm, d.offsetY);
 				}
 				if(!stallSummary.empty() && !detailedOverlay)
-					Gfx::Text(8, 290, COLOR_WARN, 0.7f, "Sem nova imagem. Consulte a pasta r6-logs.");
+					Gfx::Text(8, 290, COLOR_WARN, 0.7f, "Sem nova imagem. Consulte a pasta r7-logs.");
 				if(!stallSummary.empty() && detailedOverlay)
 				{
 					// Long line: wrap it under the overlay.
@@ -2493,14 +2498,16 @@ int main()
 
 	// Before vitaGL, which takes most of the remaining memory for its pools.
 	size_t requestedJitMax = JIT_POOL_MAX;
+	bool allowJitExpansion = true;
 	{
 		std::ifstream options(VITAPS2_DATA_DIR "/experiment.ini");
 		std::string line;
 		while(std::getline(options, line))
 			if(line.rfind("jit_pool_max_mb=", 0) == 0)
-				requestedJitMax = static_cast<size_t>(std::clamp(std::atoi(line.c_str()+16), 8, 48)) * 1024 * 1024;
+				requestedJitMax = static_cast<size_t>(std::clamp(std::atoi(line.c_str()+16), 8, 32)) * 1024 * 1024;
+			else if(line == "jit_kubridge=0") allowJitExpansion = false;
 	}
-	if(!VitaJit_Init(JIT_POOL_MIN, requestedJitMax))
+	if(!VitaJit_Init(JIT_POOL_MIN, requestedJitMax, allowJitExpansion))
 	{
 		std::string details = VitaJit_GetDiagnostics() +
 		                      "\nIf the error is 0x80020??? check that \"Unsafe Homebrew\" is enabled\n"
@@ -2510,7 +2517,7 @@ int main()
 		return 0;
 	}
 
-	if(FILE* startup = std::fopen(VITAPS2_DATA_DIR "/r6-jit-pool.txt", "w"))
+	if(FILE* startup = std::fopen(VITAPS2_DATA_DIR "/r7-jit-pool.txt", "w"))
 	{
 		std::fprintf(startup, "build=%s\n%s\n", VITAPS2_BUILD, VitaJit_GetDiagnostics().c_str());
 		std::fclose(startup);
@@ -2534,7 +2541,7 @@ int main()
 	// Compiled fixed-function shaders are cached so they are only built once.
 	sceIoMkdir(VITAPS2_DATA_DIR "/shaders", 0777);
 	vglSetShaderCachePath(VITAPS2_DATA_DIR "/shaders/");
-	CGSH_Hardware::g_glObjectDumpPath = VITAPS2_DATA_DIR "/r6-globjects.txt";
+	CGSH_Hardware::g_glObjectDumpPath = VITAPS2_DATA_DIR "/r7-globjects.txt";
 	vglInitExtended(0x80000, SCREEN_WIDTH, SCREEN_HEIGHT, GL_RAM_LEFT_FREE, SCE_GXM_MULTISAMPLE_NONE);
 	vglWaitVblankStart(GL_TRUE);
 	if(!Gfx::Init())

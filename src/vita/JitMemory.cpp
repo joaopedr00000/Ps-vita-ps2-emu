@@ -2,12 +2,18 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdint>
 #include <string>
 #include <cstdlib>
 #include <mutex>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/sysmem.h>
 #include "JitPool.h"
+
+// Public kubridge v0.3.1_hotfix ABI, weak VitaSDK imports.
+extern "C" SceUID kuKernelMemReserve(void**, SceSize, SceKernelMemBlockType);
+extern "C" int kuKernelMemCommit(void*, SceSize, SceUInt32, void*);
+extern "C" void kuKernelFlushCaches(const void*, SceSize);
 
 // Code is written through the VM domain (sceKernelOpenVMDomain makes the
 // RX block writable for the calling process), then the written range is made
@@ -17,6 +23,8 @@ namespace
 {
 	CJitPool g_pool;
 	SceUID g_block = -1;
+	bool g_expanded = false;
+	uintptr_t g_poolBase = 0;
 	std::recursive_mutex g_writeMutex;
 	int g_writeDepth = 0;
 	std::string g_diagnostics;
@@ -30,6 +38,28 @@ namespace
 	size_t g_softLimit = 0; //0 = the whole pool
 	SceUInt64 g_lastFlush = 0;
 	unsigned int g_flushes = 0;
+
+	// A weak import is not callable just because a function address is non-null.
+	// Accept only the resolved ARM syscall or absolute trampoline encoding.
+	bool IsResolved(uintptr_t address)
+	{
+		if(!address || (address & 3)) return false;
+		const auto* words = reinterpret_cast<const volatile uint32_t*>(address);
+		const uint32_t first = words[0], second = words[1];
+		if((first & 0xFFF0F000U) != 0xE300C000U) return false;
+		const uint32_t low = ((first >> 4) & 0xF000U) | (first & 0xFFFU);
+		if(second == 0xEF000000U) return low != 0;
+		if((second & 0xFFF0F000U) != 0xE340C000U) return false;
+		const uint32_t high = ((second >> 4) & 0xF000U) | (second & 0xFFFU);
+		return (low | high) != 0;
+	}
+
+	bool CanExpand()
+	{
+		return IsResolved(reinterpret_cast<uintptr_t>(&kuKernelMemReserve)) &&
+		       IsResolved(reinterpret_cast<uintptr_t>(&kuKernelMemCommit)) &&
+		       IsResolved(reinterpret_cast<uintptr_t>(&kuKernelFlushCaches));
+	}
 }
 
 void VitaJit_SetSoftLimit(size_t bytes)
@@ -74,7 +104,7 @@ std::string VitaJit_GetDiagnostics()
 	return g_diagnostics;
 }
 
-bool VitaJit_Init(size_t minSize, size_t maxSize)
+bool VitaJit_Init(size_t minSize, size_t maxSize, bool allowExpansion)
 {
 	if(g_block >= 0) return true;
 	const size_t MB = 1024 * 1024;
@@ -90,8 +120,43 @@ bool VitaJit_Init(size_t minSize, size_t maxSize)
 	g_diagnostics = buffer;
 	std::printf("%s", buffer);
 
-	// Try big first, then step down: the largest block that fits wins.
-	size_t poolSize = maxSize;
+	// Keep a single contiguous pool so linked ARM blocks stay within branch
+	// reach. Try the optional already-installed kernel bridge, never install
+	// or patch kernel modules ourselves. Limit expansion to 32 MiB.
+	if(allowExpansion && maxSize > 16 * MB && CanExpand())
+	{
+		const size_t expandedSize = std::min(maxSize, 32 * MB);
+		void* addr = nullptr;
+		const SceUID id = kuKernelMemReserve(&addr, static_cast<SceSize>(expandedSize),
+		                                    static_cast<SceKernelMemBlockType>(0x0C20D050));
+		int result = id;
+		if(id >= 0 && addr)
+		{
+			// Public ABI: READ=0x40, WRITE=0x20, EXEC=0x10.
+			result = kuKernelMemCommit(addr, static_cast<SceSize>(expandedSize), 0x70, nullptr);
+			if(result >= 0)
+			{
+				g_block = id;
+				g_expanded = true;
+				g_poolBase = reinterpret_cast<uintptr_t>(addr);
+				g_pool.Init(addr, expandedSize);
+				std::snprintf(buffer, sizeof(buffer), "JIT pool: %u MB (kubridge RWX)\n", static_cast<unsigned>(expandedSize / MB));
+				g_diagnostics += buffer;
+				return true;
+			}
+		}
+		if(id >= 0) sceKernelFreeMemBlock(id);
+		std::snprintf(buffer, sizeof(buffer), "kubridge allocation failed: 0x%08X; fallback to VM domain\n", static_cast<unsigned>(result));
+		g_diagnostics += buffer;
+	}
+	else if(maxSize > 16 * MB)
+	{
+		g_diagnostics += allowExpansion ? "kubridge API unavailable; fallback to 16 MiB VM domain\n" : "kubridge disabled by user; fallback to 16 MiB VM domain\n";
+	}
+	// Stock VM executable memory has a per-process quota. Do not retry
+	// requests above the proven 16 MiB limit.
+	minSize = std::min(minSize, 16 * MB);
+	size_t poolSize = std::min(maxSize, 16 * MB);
 	int lastError = 0;
 	while(true)
 	{
@@ -116,8 +181,11 @@ bool VitaJit_Init(size_t minSize, size_t maxSize)
 	void* base = nullptr;
 	if(sceKernelGetMemBlockBase(g_block, &base) < 0)
 	{
+		sceKernelFreeMemBlock(g_block);
+		g_block = -1;
 		return false;
 	}
+	g_poolBase = reinterpret_cast<uintptr_t>(base);
 	g_pool.Init(base, poolSize);
 	return true;
 }
@@ -171,7 +239,7 @@ extern "C" void vitaps2_jit_begin_write()
 	if(g_writeDepth++ == 0)
 	{
 		g_writeStart = sceKernelGetProcessTimeWide();
-		sceKernelOpenVMDomain();
+		if(!g_expanded) sceKernelOpenVMDomain();
 	}
 }
 
@@ -179,11 +247,25 @@ extern "C" void vitaps2_jit_end_write(void* ptr, size_t size)
 {
 	if(--g_writeDepth == 0)
 	{
-		sceKernelCloseVMDomain();
+		if(!g_expanded) sceKernelCloseVMDomain();
 	}
 	if(ptr && size)
 	{
-		sceKernelSyncVMDomain(g_block, ptr, size);
+		const uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
+		const size_t capacity = g_pool.GetCapacity();
+		if(address < g_poolBase || address - g_poolBase > capacity || size > capacity - (address - g_poolBase))
+			std::abort();
+		if(g_expanded)
+		{
+			// The bridge handles executable pages outside the VM domain.
+			const uintptr_t low = address & ~uintptr_t(0xFFF);
+			const uintptr_t high = (address + size + 0xFFF) & ~uintptr_t(0xFFF);
+			kuKernelFlushCaches(reinterpret_cast<const void*>(low), static_cast<SceSize>(high - low));
+		}
+		else
+		{
+			sceKernelSyncVMDomain(g_block, ptr, size);
+		}
 	}
 	if(g_writeDepth == 0)
 	{

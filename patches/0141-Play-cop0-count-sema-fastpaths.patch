@@ -1,0 +1,42 @@
+diff --git a/Source/COP_SCU.cpp b/Source/COP_SCU.cpp
+--- a/Source/COP_SCU.cpp
++++ b/Source/COP_SCU.cpp
+@@ -125,4 +125,6 @@
+ 		m_codeGen->Add();
+-		m_codeGen->PullRel(offsetof(CMIPS, m_State.nCOP0[CCOP_SCU::COUNT]));
+-		[[fallthrough]];
++		// Return the newly incremented value directly; no second context load.
++		m_codeGen->PushTop();
++		m_codeGen->PullRel(offsetof(CMIPS, m_State.nCOP0[CCOP_SCU::COUNT]));
++		break;
+ 	default:
+diff --git a/Source/ee/PS2OS.cpp b/Source/ee/PS2OS.cpp
+--- a/Source/ee/PS2OS.cpp
++++ b/Source/ee/PS2OS.cpp
+@@ -2800,6 +2800,4 @@
+ 
+-	if(sema->count != 0)
+-	{
+-		sema->count--;
+-	}
++	// The zero-count path returned above; retain wake/scheduling semantics.
++	sema->count--;
+ 
+diff --git a/Source/ee/Ee_IdleEvaluator.h b/Source/ee/Ee_IdleEvaluator.h
+--- a/Source/ee/Ee_IdleEvaluator.h
++++ b/Source/ee/Ee_IdleEvaluator.h
+@@ -10,3 +10,5 @@
+ 		void Reset();
+-		bool IsIdle() const;
++		bool IsIdle() const;
++		// Optional per-title override for the existing heuristic, not guest timing.
++		static inline bool g_semaIdleEnabled = true;
+ 
+diff --git a/Source/ee/Ee_IdleEvaluator.cpp b/Source/ee/Ee_IdleEvaluator.cpp
+--- a/Source/ee/Ee_IdleEvaluator.cpp
++++ b/Source/ee/Ee_IdleEvaluator.cpp
+@@ -13,3 +13,3 @@
+ {
+-	return m_semaChecker.m_isIdle ||
++	return (g_semaIdleEnabled && m_semaChecker.m_isIdle) ||
+ 	       m_selfThreadRotate.m_isIdle ||

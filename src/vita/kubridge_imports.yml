@@ -1,0 +1,12 @@
+modules:
+  kubridge:
+    nid: 0x9ae0fc25
+    libraries:
+      kubridge:
+        nid: 0x6db9389b
+        kernel: false
+        version: 0x1
+        functions:
+          kuKernelFlushCaches: 0x38b70744
+          kuKernelMemReserve: 0xced3608c
+          kuKernelMemCommit: 0x9c0cd758
